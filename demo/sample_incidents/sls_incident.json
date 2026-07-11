@@ -1,0 +1,49 @@
+{
+    "incident_id": "INC-2024-002",
+    "severity": "high",
+    "trigger": "Automated alert: CPU utilization exceeded 90% threshold",
+    "timestamp": "2024-01-15T14:30:00Z",
+    "sls_config": {
+        "project": "production-logs",
+        "logstore": "app-logs",
+        "query": "*",
+        "lookback_minutes": 30,
+        "services": ["service-api", "service-db", "load-balancer"],
+        "levels": ["ERROR", "CRITICAL", "WARN"]
+    },
+    "metrics": {
+        "cpu_utilization": [
+            {"timestamp": "14:20:00", "value": 42.3},
+            {"timestamp": "14:25:00", "value": 78.5},
+            {"timestamp": "14:26:00", "value": 95.2},
+            {"timestamp": "14:27:00", "value": 97.8},
+            {"timestamp": "14:28:00", "value": 96.1}
+        ],
+        "memory_usage_gb": [
+            {"timestamp": "14:20:00", "value": 2.1},
+            {"timestamp": "14:25:00", "value": 3.2},
+            {"timestamp": "14:26:00", "value": 3.8},
+            {"timestamp": "14:27:00", "value": 3.9}
+        ],
+        "error_rate_pct": [
+            {"timestamp": "14:20:00", "value": 0.5},
+            {"timestamp": "14:25:00", "value": 12.3},
+            {"timestamp": "14:26:00", "value": 35.7},
+            {"timestamp": "14:27:00", "value": 45.2}
+        ],
+        "request_latency_p99_ms": [
+            {"timestamp": "14:20:00", "value": 120},
+            {"timestamp": "14:25:00", "value": 8500},
+            {"timestamp": "14:26:00", "value": 30000},
+            {"timestamp": "14:27:00", "value": 30000}
+        ],
+        "db_connection_pool": [
+            {"timestamp": "14:20:00", "value": 120},
+            {"timestamp": "14:25:00", "value": 498},
+            {"timestamp": "14:26:00", "value": 500},
+            {"timestamp": "14:27:00", "value": 500}
+        ]
+    },
+    "affected_services": ["service-api", "service-db", "load-balancer"],
+    "affected_users_estimate": "~15,000 active sessions"
+}

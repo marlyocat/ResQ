@@ -80,8 +80,11 @@ cp .env.example .env
 ### Run
 
 ```bash
-# Run a sample incident simulation
+# Run a sample incident with static (pre-loaded) logs
 python main.py --incident demo/sample_incidents/high_cpu.json
+
+# Run a live incident fetching logs from Alibaba Cloud SLS
+python main.py --sls-incident demo/sample_incidents/sls_incident.json
 
 # Run baseline comparison (single-agent vs multi-agent)
 python main.py --baseline-comparison
@@ -89,6 +92,21 @@ python main.py --baseline-comparison
 # Run tests
 pytest tests/
 ```
+
+### Running with Live SLS Logs
+
+To fetch real logs from Alibaba Cloud SLS:
+
+1. Install the SLS SDK: `pip install aliyun-log-python-sdk`
+2. Set your Alibaba Cloud credentials in `.env`:
+   ```
+   ALIBABA_ACCESS_KEY_ID=your_key
+   ALIBABA_ACCESS_KEY_SECRET=your_secret
+   ALIBABA_REGION_ID=cn-hangzhou  # or your region
+   ```
+3. Create an SLS project and logstore, then configure your apps to ship logs there
+4. Update `demo/sample_incidents/sls_incident.json` with your project/logstore names
+5. Run: `python main.py --sls-incident demo/sample_incidents/sls_incident.json`
 
 ## Project Structure
 
