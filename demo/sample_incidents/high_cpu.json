@@ -1,0 +1,42 @@
+{
+    "incident_id": "INC-2024-001",
+    "severity": "high",
+    "trigger": "Automated alert: CPU utilization exceeded 90% threshold",
+    "timestamp": "2024-01-15T14:30:00Z",
+    "logs": "2024-01-15T14:25:00Z [ERROR] service-api: Connection pool exhausted (active=500, max=500)\n2024-01-15T14:25:01Z [WARN] service-api: Request timeout after 30s (endpoint: /api/users)\n2024-01-15T14:25:03Z [ERROR] service-api: OOM kill candidate: heap size 3.2GB (limit: 4GB)\n2024-01-15T14:25:05Z [ERROR] service-db: Slow query detected: SELECT * FROM users WHERE ... (execution_time: 15.2s)\n2024-01-15T14:25:10Z [ERROR] service-api: Connection refused to downstream service-db (connection pool exhausted)\n2024-01-15T14:26:00Z [CRITICAL] service-api: Health check failed, instance marked unhealthy\n2024-01-15T14:26:30Z [ERROR] load-balancer: Backend server api-node-3 removed from pool\n2024-01-15T14:27:00Z [ERROR] service-api: Cascading failures detected across 3/5 instances\n2024-01-15T14:28:00Z [WARN] service-db: Query queue depth: 847 (threshold: 100)\n2024-01-15T14:29:00Z [ERROR] service-api: 503 errors: 45% of requests failing",
+    "metrics": {
+        "cpu_utilization": [
+            {"timestamp": "14:20:00", "value": 42.3},
+            {"timestamp": "14:25:00", "value": 78.5},
+            {"timestamp": "14:26:00", "value": 95.2},
+            {"timestamp": "14:27:00", "value": 97.8},
+            {"timestamp": "14:28:00", "value": 96.1}
+        ],
+        "memory_usage_gb": [
+            {"timestamp": "14:20:00", "value": 2.1},
+            {"timestamp": "14:25:00", "value": 3.2},
+            {"timestamp": "14:26:00", "value": 3.8},
+            {"timestamp": "14:27:00", "value": 3.9}
+        ],
+        "error_rate_pct": [
+            {"timestamp": "14:20:00", "value": 0.5},
+            {"timestamp": "14:25:00", "value": 12.3},
+            {"timestamp": "14:26:00", "value": 35.7},
+            {"timestamp": "14:27:00", "value": 45.2}
+        ],
+        "request_latency_p99_ms": [
+            {"timestamp": "14:20:00", "value": 120},
+            {"timestamp": "14:25:00", "value": 8500},
+            {"timestamp": "14:26:00", "value": 30000},
+            {"timestamp": "14:27:00", "value": 30000}
+        ],
+        "db_connection_pool": [
+            {"timestamp": "14:20:00", "value": 120},
+            {"timestamp": "14:25:00", "value": 498},
+            {"timestamp": "14:26:00", "value": 500},
+            {"timestamp": "14:27:00", "value": 500}
+        ]
+    },
+    "affected_services": ["service-api", "service-db", "load-balancer"],
+    "affected_users_estimate": "~15,000 active sessions"
+}

@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  resq-orchestrator:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    environment:
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - ALIBABA_ACCESS_KEY_ID=${ALIBABA_ACCESS_KEY_ID}
+      - ALIBABA_ACCESS_KEY_SECRET=${ALIBABA_ACCESS_KEY_SECRET}
+    volumes:
+      - ../demo/results:/app/demo/results
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M

@@ -1,0 +1,11 @@
+# Requirements for ResQ
+
+# Core dependencies
+openai>=1.0.0
+python-dotenv>=1.0.0
+pytest>=7.0.0
+pytest-asyncio>=0.23.0
+
+# Alibaba Cloud SDK (for deployment proof)
+# Install separately when ready to test with real services:
+# pip install alibabacloud_ecs20140526 alibabacloud_sls20201230 alibabacloud_cms20190101
