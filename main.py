@@ -5,7 +5,6 @@ Main entry point for running ResQ incident response simulations.
 Usage:
     python main.py --incident demo/sample_incidents/high_cpu.json
     python main.py --sls-incident demo/sample_incidents/sls_incident.json
-    python main.py --baseline-comparison
 """
 
 import asyncio
@@ -91,89 +90,16 @@ class ResQSwarm:
         return results
 
 
-async def run_baseline_comparison():
-    """
-    Run single-agent vs multi-agent comparison on the same incident.
-    
-    This is the key experiment demonstrating the value of multi-agent collaboration.
-    """
-    logger.info("=== BASELINE COMPARISON: Single-Agent vs Multi-Agent ===")
-    
-    # Load sample incident
-    with open("demo/sample_incidents/high_cpu.json", "r") as f:
-        incident_data = json.load(f)
-
-    # === Single-Agent Baseline ===
-    logger.info("Running single-agent baseline...")
-    single_start = time.time()
-    
-    qwen_client = QwenClient()
-    combined_prompt = """You are an incident response expert. Analyze the following logs AND metrics 
-    to identify the root cause and propose a remediation plan."""
-    
-    combined_input = f"LOGS:\n{incident_data.get('logs', '')}\n\nMETRICS:\n{incident_data.get('metrics', '')}"
-    
-    single_response = await qwen_client.analyze_with_context(
-        system_prompt=combined_prompt,
-        user_input=combined_input
-    )
-    single_time = time.time() - single_start
-
-    # === Multi-Agent (ResQ) ===
-    logger.info("Running multi-agent ResQ swarm...")
-    swarm = ResQSwarm(qwen_client)
-    swarm_start = time.time()
-    swarm_result = await swarm.handle_incident(incident_data)
-    swarm_time = time.time() - swarm_start
-
-    # === Comparison ===
-    comparison = {
-        "single_agent": {
-            "time_seconds": round(single_time, 2),
-            "response_length": len(single_response.get("raw_response", "")),
-            "response": single_response.get("raw_response", "")[:500] + "..."
-        },
-        "multi_agent_resq": {
-            "time_seconds": round(swarm_time, 2),
-            "agents_used": 5,
-            "hypotheses_generated": (
-                len(swarm_result.get("log_analyzer", {}).get("hypotheses", [])) +
-                len(swarm_result.get("metric_monitor", {}).get("hypotheses", []))
-            ),
-            "conflict_resolved": "coordinator_arbitration" in str(swarm_result.get("coordinator", {}))
-        }
-    }
-
-    logger.info("\n" + "=" * 60)
-    logger.info("BASELINE COMPARISON RESULTS")
-    logger.info("=" * 60)
-    logger.info(f"Single-Agent Time: {single_time:.2f}s")
-    logger.info(f"Multi-Agent Time:  {swarm_time:.2f}s")
-    logger.info(f"Multi-Agent Hypotheses: {comparison['multi_agent_resq']['hypotheses_generated']}")
-    logger.info("=" * 60)
-
-    # Save comparison
-    with open("docs/baseline_comparison_results.json", "w") as f:
-        json.dump(comparison, f, indent=2)
-    
-    logger.info("Results saved to docs/baseline_comparison_results.json")
-    return comparison
-
-
 async def main():
     parser = argparse.ArgumentParser(description="ResQ — Multi-Agent Incident Response Swarm")
     parser.add_argument("--incident", type=str, help="Path to incident JSON file (static logs)")
     parser.add_argument("--sls-incident", type=str,
                         help="Path to incident JSON file with SLS config (fetches live logs from Alibaba Cloud SLS)")
-    parser.add_argument("--baseline-comparison", action="store_true",
-                        help="Run single-agent vs multi-agent comparison")
     args = parser.parse_args()
 
     qwen_client = QwenClient()
 
-    if args.baseline_comparison:
-        await run_baseline_comparison()
-    elif args.sls_incident:
+    if args.sls_incident:
         if not SLS_SDK_AVAILABLE:
             logger.error(
                 "SLS SDK not installed. Install with: pip install aliyun-log-python-sdk"

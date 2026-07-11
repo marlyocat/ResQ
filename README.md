@@ -4,7 +4,7 @@ An agentic incident response system where specialized agents collaborate to diag
 
 ## Overview
 
-ResQ demonstrates that a multi-agent swarm outperforms a single-agent baseline in incident response by:
+ResQ replaces a single overloaded AI with a swarm of 5 specialized agents that collaborate through structured roles:
 
 - **Parallel diagnosis** — Log Analyzer and Metric Monitor independently investigate signals
 - **Structured arbitration** — Coordinator resolves competing root cause hypotheses
@@ -86,9 +86,6 @@ python main.py --incident demo/sample_incidents/high_cpu.json
 # Run a live incident fetching logs from Alibaba Cloud SLS
 python main.py --sls-incident demo/sample_incidents/sls_incident.json
 
-# Run baseline comparison (single-agent vs multi-agent)
-python main.py --baseline-comparison
-
 # Run tests
 pytest tests/
 ```
@@ -125,7 +122,7 @@ ResQ/
 ├── integrations/        # External service connections
 │   ├── qwen_client.py      # Qwen Cloud API integration
 │   └── alibaba_cloud.py    # Alibaba Cloud deployment proof
-├── tests/               # Test suite + baseline comparison
+├── tests/               # Test suite for consensus and communication
 ├── demo/                # Demo materials and sample incidents
 ├── deploy/              # Alibaba Cloud deployment configs
 ├── docs/                # Additional documentation
@@ -141,15 +138,17 @@ ResQ/
 - **Architecture Diagram:** See above + `ARCHITECTURE.md`
 - **Alibaba Cloud Deployment Proof:** See `integrations/alibaba_cloud.py`
 
-## Measurable Results
+## How Multi-Agent Collaboration Works
 
-| Metric | Single-Agent | ResQ (Multi-Agent) | Improvement |
-|--------|-------------|-------------------|-------------|
-| MTTR (simulated) | X min | Y min | Z% faster |
-| Diagnostic accuracy | X% | Y% | +Z% |
-| Issues caught | X | Y | +Z% |
+| Agent | Responsibility | What makes it effective |
+|-------|---------------|------------------------|
+| **Log Analyzer** | Parses production logs, identifies error patterns | Focused on one data source — no metric noise to distract it |
+| **Metric Monitor** | Analyzes time-series metrics for anomalies | Cross-metric correlation — catches cascading failures early |
+| **Coordinator** | Arbitrates between competing hypotheses | Structured conflict resolution with evidence scoring — not just picking the loudest voice |
+| **Runbook Executor** | Executes verified remediation actions | Safety-first — only runs approved actions, verifies each step |
+| **Post-Mortem Writer** | Generates incident documentation | Dedicated to thoroughness — timeline, root cause, impact, action items |
 
-*Results will be populated after full implementation and testing.*
+**Why this beats a single agent:** Each agent focuses on one signal type with a tailored system prompt. Two independent diagnoses surface more hypotheses. The Coordinator forces structured debate instead of implicit trade-offs. And the output is auditable — you can see exactly which agent said what.
 
 ## License
 

@@ -28,7 +28,7 @@
 - **Show**: `integrations/alibaba_cloud.py` — highlight the SLS SDK imports and `query_logs()` method
 - **Show**: `deploy/terraform/main.tf` — infrastructure-as-code for Alibaba Cloud
 
-## Scene 7: Baseline Comparison (2:40-3:00)
-- **Narration**: "Here's the critical comparison. The same incident run through a single agent vs. ResQ's multi-agent swarm. ResQ produces more hypotheses, higher evidence quality, and more complete documentation."
-- **Show**: `python main.py --baseline-comparison` output with comparison table
+## Scene 7: Why Multi-Agent (2:40-3:00)
+- **Narration**: "Five agents. Five specialized roles. Each focused on one signal, producing auditable output. The Coordinator forces structured debate instead of implicit trade-offs. That's the ResQ advantage."
+- **Show**: The "How Multi-Agent Collaboration Works" table from README
 - **Close**: "ResQ — proving that multi-agent collaboration outperforms single-agent AI. Built for the Qwen Cloud Global AI Hackathon."
