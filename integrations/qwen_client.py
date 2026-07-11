@@ -23,7 +23,7 @@ class QwenClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         model: str = "qwen-plus"
     ):
         if AsyncOpenAI is None:

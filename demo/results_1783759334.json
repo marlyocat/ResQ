@@ -1,0 +1,44 @@
+{
+  "log_analyzer": {
+    "hypotheses": [],
+    "raw_analysis": {
+      "error": "Error code: 404 - {'error': {'message': 'The model `qwen3` does not exist or you do not have access to it.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_found'}, 'request_id': '2fad6cf8-60f5-98c0-b41a-d98d9f30cc10'}",
+      "raw_response": ""
+    },
+    "log_source": "static"
+  },
+  "metric_monitor": {
+    "hypotheses": [],
+    "raw_analysis": {
+      "error": "Error code: 404 - {'error': {'message': 'The model `qwen3` does not exist or you do not have access to it.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_found'}, 'request_id': '81a675cb-f47b-9b0f-96fd-fce0c9faffb4'}",
+      "raw_response": ""
+    }
+  },
+  "coordinator": {
+    "root_cause": {
+      "cause": "Unknown - insufficient data for diagnosis",
+      "confidence": 0.0,
+      "adjusted_score": 0.0,
+      "evidence": [],
+      "severity": "unknown"
+    },
+    "justification": "No diagnostic hypotheses provided by either agent. Manual investigation required.",
+    "action_plan": {
+      "steps": "",
+      "verified": false
+    }
+  },
+  "runbook_executor": {
+    "status": "skipped",
+    "reason": "empty action plan"
+  },
+  "postmortem": {
+    "postmortem": "",
+    "generated_at": "incident_completed"
+  },
+  "metadata": {
+    "total_time_seconds": 4.25,
+    "agents_used": 5,
+    "log_source": "static"
+  }
+}

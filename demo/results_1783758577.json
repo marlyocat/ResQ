@@ -1,0 +1,44 @@
+{
+  "log_analyzer": {
+    "hypotheses": [],
+    "raw_analysis": {
+      "error": "Error code: 401 - {'error': {'message': 'Incorrect API key provided. For details, see: https://help.aliyun.com/zh/model-studio/error-code#apikey-error', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}, 'request_id': '12027705-84b0-950e-b3c9-a22af8646244'}",
+      "raw_response": ""
+    },
+    "log_source": "static"
+  },
+  "metric_monitor": {
+    "hypotheses": [],
+    "raw_analysis": {
+      "error": "Error code: 401 - {'error': {'message': 'Incorrect API key provided. For details, see: https://help.aliyun.com/zh/model-studio/error-code#apikey-error', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}, 'request_id': 'c0cdad1c-563e-91d0-839d-86f19c2bf726'}",
+      "raw_response": ""
+    }
+  },
+  "coordinator": {
+    "root_cause": {
+      "cause": "Unknown - insufficient data for diagnosis",
+      "confidence": 0.0,
+      "adjusted_score": 0.0,
+      "evidence": [],
+      "severity": "unknown"
+    },
+    "justification": "No diagnostic hypotheses provided by either agent. Manual investigation required.",
+    "action_plan": {
+      "steps": "",
+      "verified": false
+    }
+  },
+  "runbook_executor": {
+    "status": "skipped",
+    "reason": "empty action plan"
+  },
+  "postmortem": {
+    "postmortem": "",
+    "generated_at": "incident_completed"
+  },
+  "metadata": {
+    "total_time_seconds": 2.82,
+    "agents_used": 5,
+    "log_source": "static"
+  }
+}

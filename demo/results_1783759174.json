@@ -1,0 +1,44 @@
+{
+  "log_analyzer": {
+    "hypotheses": [],
+    "raw_analysis": {
+      "error": "Error code: 403 - {'error': {'message': 'Access to model denied. Please make sure you are eligible for using the model.', 'type': 'AccessDenied.Unpurchased', 'param': None, 'code': 'AccessDenied.Unpurchased'}, 'id': 'chatcmpl-cd03e05d-5641-903d-b32e-c0e067ac85d5', 'request_id': 'cd03e05d-5641-903d-b32e-c0e067ac85d5'}",
+      "raw_response": ""
+    },
+    "log_source": "static"
+  },
+  "metric_monitor": {
+    "hypotheses": [],
+    "raw_analysis": {
+      "error": "Error code: 403 - {'error': {'message': 'Access to model denied. Please make sure you are eligible for using the model.', 'type': 'AccessDenied.Unpurchased', 'param': None, 'code': 'AccessDenied.Unpurchased'}, 'id': 'chatcmpl-fd40af4e-fa07-9fc1-b15a-880da94eaf37', 'request_id': 'fd40af4e-fa07-9fc1-b15a-880da94eaf37'}",
+      "raw_response": ""
+    }
+  },
+  "coordinator": {
+    "root_cause": {
+      "cause": "Unknown - insufficient data for diagnosis",
+      "confidence": 0.0,
+      "adjusted_score": 0.0,
+      "evidence": [],
+      "severity": "unknown"
+    },
+    "justification": "No diagnostic hypotheses provided by either agent. Manual investigation required.",
+    "action_plan": {
+      "steps": "",
+      "verified": false
+    }
+  },
+  "runbook_executor": {
+    "status": "skipped",
+    "reason": "empty action plan"
+  },
+  "postmortem": {
+    "postmortem": "",
+    "generated_at": "incident_completed"
+  },
+  "metadata": {
+    "total_time_seconds": 3.18,
+    "agents_used": 5,
+    "log_source": "static"
+  }
+}

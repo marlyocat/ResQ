@@ -13,6 +13,9 @@ import json
 import logging
 import time
 from typing import Dict
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from integrations.qwen_client import QwenClient
 from integrations.alibaba_cloud import AlibabaCloudIntegration, SLS_SDK_AVAILABLE
