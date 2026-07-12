@@ -711,9 +711,6 @@ class ResQApp(App):
     Screen {
         background: $surface;
     }
-    * {
-        scrollbar-size: 0 0;
-    }
     #main-scroll {
         height: 1fr;
         overflow-y: auto;
@@ -740,6 +737,7 @@ class ResQApp(App):
     }
     #timeline-panel {
         border: solid $accent;
+        scrollbar-size: 0 0;
     }
     """
 
