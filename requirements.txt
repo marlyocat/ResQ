@@ -10,6 +10,7 @@ requests>=2.31.0
 psutil>=5.9.0
 rich>=13.0.0
 textual>=0.40.0
+oss2>=2.18.0
 
 # Alibaba Cloud SDK (for deployment proof)
 # Install separately when ready to test with real services:

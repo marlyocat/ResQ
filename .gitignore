@@ -33,3 +33,11 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Demo artifacts
+demo/results_*.json
+demo/incident_report.html
+target/resq_demo.db
+
+# Qwen
+.qwen/

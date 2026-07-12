@@ -15,7 +15,8 @@
       "Bash(echo.)",
       "Bash(dir *)",
       "Bash(do *)",
-      "Bash(ping *)"
+      "Bash(ping *)",
+      "Bash(del *)"
     ]
   },
   "$version": 4
