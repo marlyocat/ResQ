@@ -27,6 +27,26 @@ except ImportError:
 
 app = Flask(__name__)
 
+# ─ Scenario Configuration ───────────────────────────────────────────
+import argparse
+
+parser = argparse.ArgumentParser(description="ResQ Target Service")
+parser.add_argument("--scenario", type=int, default=1, choices=[1, 2, 3, 4, 5],
+                    help="Scenario number (1-5)")
+args = parser.parse_args()
+SCENARIO = args.scenario
+
+# Scenario-specific failure timing
+SCENARIO_FAILURE_DELAY = {
+    1: 15,  # DB pool exhaustion
+    2: 15,  # Cache failure
+    3: 15,  # Queue failure
+    4: 10,  # Memory leak (faster now)
+    5: 15,  # External API failure
+}
+
+FAILURE_DELAY = SCENARIO_FAILURE_DELAY.get(SCENARIO, 15)
+
 # ── Database Setup ───────────────────────────────────────────────────
 DB_PATH = os.path.join(os.path.dirname(__file__), "resq_demo.db")
 
@@ -58,6 +78,85 @@ def init_db():
 
 init_db()
 
+# ─ Message Queue Setup ──────────────────────────────────────────────
+import queue as stdlib_queue
+message_queue = stdlib_queue.Queue(maxsize=100)
+queue_healthy = True
+queue_errors = 0
+
+# External API health (for scenario 5)
+external_api_healthy = True
+
+# Cache disabled flag (for scenario 2)
+cache_disabled = False
+
+
+def simulate_queue_failure(delay=15):
+    """Simulate queue failure after delay (for scenario 3)."""
+    global queue_healthy
+    time.sleep(delay)
+    queue_healthy = False
+    logger.error("Message queue connection lost - all publishing will fail [file:target/app.py, func:simulate_queue_failure, line:95]")
+
+
+def simulate_cache_failure(delay=15):
+    """Simulate cache failure after delay (for scenario 2)."""
+    global cache_hits, cache_misses, cache, cache_disabled
+    time.sleep(delay)
+    # Clear cache and disable it permanently
+    cache.clear()
+    cache_disabled = True
+    cache_hits = 0
+    cache_misses = 0
+    logger.error("Cache service unavailable - all requests will miss cache [file:target/app.py, func:simulate_cache_failure, line:110]")
+
+
+def simulate_memory_leak(delay=10):
+    """Simulate memory leak by allocating memory over time (for scenario 4)."""
+    global degraded
+    leaked_memory = []
+    time.sleep(delay)
+    logger.warning("Memory leak detected - allocating memory continuously [file:target/app.py, func:simulate_memory_leak, line:115]")
+    while True:
+        # Allocate ~10MB every second
+        leaked_memory.append(bytearray(10 * 1024 * 1024))
+        time.sleep(1)
+        # After 10 seconds of leaking, start causing errors
+        if len(leaked_memory) > 10:
+            degraded = True
+            if len(leaked_memory) % 3 == 0:
+                logger.error(f"Out of memory - service degraded ({len(leaked_memory) * 10}MB leaked) [file:target/app.py, func:simulate_memory_leak, line:125]")
+
+
+def simulate_external_api_failure(delay=15):
+    """Simulate external API failure (for scenario 5)."""
+    global external_api_healthy
+    time.sleep(delay)
+    external_api_healthy = False
+    logger.error("External payment API connection timeout - service unavailable [file:target/app.py, func:simulate_external_api_failure, line:130]")
+
+
+def simulate_db_pool_exhaustion(delay=15):
+    """Simulate DB connection pool exhaustion (for scenario 1)."""
+    global db_pool_active, db_pool_exhausted
+    time.sleep(delay)
+    db_pool_active = DB_POOL_SIZE  # Pool is now full
+    db_pool_exhausted = True
+    logger.error(f"Database connection pool exhausted - {DB_POOL_SIZE}/{DB_POOL_SIZE} connections active [file:target/app.py, func:simulate_db_pool_exhaustion, line:140]")
+
+
+# Start scenario-specific failure simulation
+if SCENARIO == 1:
+    threading.Thread(target=simulate_db_pool_exhaustion, args=(FAILURE_DELAY,), daemon=True).start()
+elif SCENARIO == 2:
+    threading.Thread(target=simulate_cache_failure, args=(FAILURE_DELAY,), daemon=True).start()
+elif SCENARIO == 3:
+    threading.Thread(target=simulate_queue_failure, args=(FAILURE_DELAY,), daemon=True).start()
+elif SCENARIO == 4:
+    threading.Thread(target=simulate_memory_leak, args=(FAILURE_DELAY,), daemon=True).start()
+elif SCENARIO == 5:
+    threading.Thread(target=simulate_external_api_failure, args=(FAILURE_DELAY,), daemon=True).start()
+
 # ── State ───────────────────────────────────────────────────────────
 lock = threading.Lock()
 request_count = 0
@@ -70,6 +169,11 @@ MAX_LOG_BUFFER = 500
 metrics_history = []  # rolling metrics snapshots
 MAX_METRICS_HISTORY = 300
 
+# DB Connection Pool simulation (scenario 1)
+DB_POOL_SIZE = 500
+db_pool_active = 0
+db_pool_exhausted = False
+
 # ── Cache (in-memory) ────────────────────────────────────────────────
 cache = {}  # key -> {"data": ..., "expires": timestamp}
 CACHE_TTL = 10  # seconds
@@ -80,6 +184,9 @@ cache_misses = 0
 def cache_get(key):
     """Get value from cache if not expired."""
     global cache_hits, cache_misses
+    if cache_disabled:
+        cache_misses += 1
+        return None
     if key in cache:
         entry = cache[key]
         if time.time() < entry["expires"]:
@@ -93,6 +200,8 @@ def cache_get(key):
 
 def cache_set(key, data):
     """Set value in cache with TTL."""
+    if cache_disabled:
+        return
     cache[key] = {
         "data": data,
         "expires": time.time() + CACHE_TTL
@@ -166,6 +275,9 @@ def _record_metrics_snapshot():
                 "cache_hits": cache_hits,
                 "cache_misses": cache_misses,
                 "cache_hit_rate": cache_hit_rate,
+                "queue_healthy": queue_healthy,
+                "queue_errors": queue_errors,
+                "queue_size": message_queue.qsize(),
                 "degraded": degraded,
             }
             metrics_history.append(snapshot)
@@ -190,6 +302,7 @@ def _record(latency, errored=False):
 # ── Endpoints ───────────────────────────────────────────────────────
 @app.route("/api/users")
 def get_users():
+    global queue_errors
     start = time.time()
     
     try:
@@ -200,21 +313,41 @@ def get_users():
             _record(latency)
             logger.info(f"GET /api/users — 200 — {int(latency * 1000)}ms — CACHE HIT [file:target/app.py, func:get_users, line:195]")
             return jsonify({"users": cached, "cached": True})
-        
-        conn = sqlite3.connect(DB_PATH, timeout=5)
-        conn.row_factory = sqlite3.Row
-        
-        if degraded and random.random() < 0.3:
-            # Simulate slow query / connection exhaustion
-            time.sleep(random.uniform(2, 5))
+
+        # Cache miss - simulate DB overload from cache miss storm (scenario 2)
+        if SCENARIO == 2 and cache_misses > 10:
+            time.sleep(random.uniform(2, 5))  # DB is overloaded
             _record(time.time() - start, errored=True)
             import traceback
             tb = traceback.format_stack()[-3:]
             tb_str = "".join(tb)
-            logger.error(f"Database query timeout after 5s — connection pool exhausted [file:target/app.py, func:get_users, line:205]\nTraceback (most recent call last):\n{tb_str}")
-            conn.close()
+            logger.error(f"Database query timeout - cache miss storm overwhelming DB [file:target/app.py, func:get_users, line:210]\nTraceback (most recent call last):\n{tb_str}")
             return jsonify({"error": "database timeout"}), 503
+
+        # Memory leak causing OOM (scenario 4)
+        if SCENARIO == 4 and degraded:
+            time.sleep(random.uniform(3, 6))
+            _record(time.time() - start, errored=True)
+            import traceback
+            tb = traceback.format_stack()[-3:]
+            tb_str = "".join(tb)
+            logger.error(f"Out of memory error - service unstable [file:target/app.py, func:get_users, line:220]\nTraceback (most recent call last):\n{tb_str}")
+            return jsonify({"error": "service unavailable"}), 503
         
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.row_factory = sqlite3.Row
+
+        # Simulate DB pool exhaustion (scenario 1)
+        if db_pool_exhausted and random.random() < 0.7:
+            time.sleep(random.uniform(3, 6))  # Long wait for connection
+            _record(time.time() - start, errored=True)
+            import traceback
+            tb = traceback.format_stack()[-3:]
+            tb_str = "".join(tb)
+            logger.error(f"Database connection timeout - pool exhausted ({DB_POOL_SIZE}/{DB_POOL_SIZE} active) [file:target/app.py, func:get_users, line:240]\nTraceback (most recent call last):\n{tb_str}")
+            conn.close()
+            return jsonify({"error": "database connection timeout"}), 503
+
         # Real database query
         cursor = conn.execute("SELECT id, name, email FROM users")
         users = [dict(row) for row in cursor.fetchall()]
@@ -222,7 +355,28 @@ def get_users():
         
         # Cache the result
         cache_set("users_list", users)
-        
+
+        # Publish to message queue (for notification service)
+        if queue_healthy:
+            try:
+                message_queue.put_nowait({"type": "user_query", "count": len(users), "timestamp": datetime.now().isoformat()})
+            except stdlib_queue.Full:
+                queue_errors += 1
+                logger.error(f"Message queue full - cannot publish user query result [file:target/app.py, func:get_users, line:225]")
+        else:
+            # Scenario 3: Queue failure causes request failures
+            if SCENARIO == 3:
+                queue_errors += 1
+                _record(time.time() - start, errored=True)
+                import traceback
+                tb = traceback.format_stack()[-3:]
+                tb_str = "".join(tb)
+                logger.error(f"Message queue unhealthy - request failed [file:target/app.py, func:get_users, line:230]\nTraceback (most recent call last):\n{tb_str}")
+                return jsonify({"error": "message queue unavailable"}), 503
+            else:
+                queue_errors += 1
+                logger.error(f"Message queue unhealthy - cannot publish user query result [file:target/app.py, func:get_users, line:235]")
+
         latency = time.time() - start
         _record(latency)
         logger.info(f"GET /api/users — 200 — {int(latency * 1000)}ms — returned {len(users)} users — CACHE MISS [file:target/app.py, func:get_users, line:220]")
@@ -238,6 +392,7 @@ def get_users():
 
 @app.route("/api/orders", methods=["GET"])
 def get_orders():
+    global queue_errors
     start = time.time()
     
     try:
@@ -248,20 +403,39 @@ def get_orders():
             _record(latency)
             logger.info(f"GET /api/orders — 200 — {int(latency * 1000)}ms — CACHE HIT [file:target/app.py, func:get_orders, line:240]")
             return jsonify({"orders": cached, "cached": True})
-        
-        conn = sqlite3.connect(DB_PATH, timeout=5)
-        conn.row_factory = sqlite3.Row
-        
-        if degraded and random.random() < 0.4:
-            # Simulate connection refused / pool exhaustion
-            time.sleep(random.uniform(1, 4))
+
+        # Cache miss - simulate DB overload from cache miss storm (scenario 2)
+        if SCENARIO == 2 and cache_misses > 10:
+            time.sleep(random.uniform(2, 5))  # DB is overloaded
             _record(time.time() - start, errored=True)
             import traceback
             tb = traceback.format_stack()[-3:]
             tb_str = "".join(tb)
-            logger.error(f"Upstream database connection refused — all backends unhealthy [file:target/app.py, func:get_orders, line:255]\nTraceback (most recent call last):\n{tb_str}")
-            conn.close()
+            logger.error(f"Database query timeout - cache miss storm overwhelming DB [file:target/app.py, func:get_orders, line:260]\nTraceback (most recent call last):\n{tb_str}")
+            return jsonify({"error": "database timeout"}), 503
+
+        # Memory leak causing OOM (scenario 4)
+        if SCENARIO == 4 and degraded:
+            time.sleep(random.uniform(3, 6))
+            _record(time.time() - start, errored=True)
+            import traceback
+            tb = traceback.format_stack()[-3:]
+            tb_str = "".join(tb)
+            logger.error(f"Out of memory error - service unstable [file:target/app.py, func:get_orders, line:270]\nTraceback (most recent call last):\n{tb_str}")
             return jsonify({"error": "service unavailable"}), 503
+        
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.row_factory = sqlite3.Row
+
+        # Simulate external API call for payment processing (scenario 5)
+        if SCENARIO == 5 and not external_api_healthy:
+            time.sleep(random.uniform(3, 6))  # Long timeout
+            _record(time.time() - start, errored=True)
+            import traceback
+            tb = traceback.format_exc()
+            logger.error(f"External payment API timeout after 5s - service unavailable [file:target/app.py, func:get_orders, line:265]\nTraceback (most recent call last):\n{tb}")
+            conn.close()
+            return jsonify({"error": "payment service unavailable"}), 503
         
         # Real database query with join
         cursor = conn.execute("""
@@ -320,6 +494,14 @@ def metrics():
             "cache_hits": cache_hits,
             "cache_misses": cache_misses,
             "cache_hit_rate": cache_hit_rate,
+            "queue_healthy": queue_healthy,
+            "queue_errors": queue_errors,
+            "queue_size": message_queue.qsize(),
+            "external_api_healthy": external_api_healthy,
+            "scenario": SCENARIO,
+            "db_pool_active": db_pool_active,
+            "db_pool_size": DB_POOL_SIZE,
+            "db_pool_exhausted": db_pool_exhausted,
             "degraded": degraded,
             "uptime_since": start_time,
         })

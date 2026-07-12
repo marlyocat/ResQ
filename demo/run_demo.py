@@ -1,7 +1,14 @@
-"""ResQ Demo — single command that runs everything.
+"""ResQ Demo - single command that runs everything.
 
 Usage:
-    python demo/run_demo.py
+    python demo/run_demo.py --scenario <1-5>
+
+Scenarios:
+    1 - Database Connection Pool Exhaustion
+    2 - Cache Failure
+    3 - Message Queue Failure
+    4 - Memory Leak
+    5 - External API Dependency Failure
 
 Starts the target service, waits, triggers the incident, and shows
 the terminal UI with the full agent investigation.
@@ -12,15 +19,25 @@ import time
 import sys
 import os
 import subprocess
+import argparse
 
 # Add project root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+SCENARIOS = {
+    1: "Database Connection Pool Exhaustion",
+    2: "Cache Failure",
+    3: "Message Queue Failure",
+    4: "Memory Leak",
+    5: "External API Dependency Failure",
+}
 
-def start_target_service():
+
+def start_target_service(scenario):
     """Start the target Flask service in a background thread."""
     subprocess.Popen(
-        [sys.executable, os.path.join(os.path.dirname(__file__), "..", "target", "app.py")],
+        [sys.executable, os.path.join(os.path.dirname(__file__), "..", "target", "app.py"),
+         "--scenario", str(scenario)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -37,10 +54,18 @@ def start_load_sim(delay=12):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="ResQ Demo")
+    parser.add_argument("--scenario", type=int, default=1, choices=[1, 2, 3, 4, 5],
+                        help="Scenario number (1-5)")
+    args = parser.parse_args()
+    scenario = args.scenario
+
     print()
-    print("  ==================================================")
+    print("  " + "=" * 50)
     print("  ResQ - Multi-Agent Incident Response")
-    print("  ==================================================")
+    print("  " + "=" * 50)
+    print(f"  Scenario {scenario}: {SCENARIOS[scenario]}")
+    print("  " + "=" * 50)
     print()
 
     # Kill any existing services on port 5000
@@ -52,7 +77,7 @@ def main():
     print("  Starting target service...")
 
     # Start target service
-    start_target_service()
+    start_target_service(scenario)
     time.sleep(3)
 
     print("  Starting load simulator (incident in ~12s)...")
@@ -65,14 +90,8 @@ def main():
     time.sleep(1)
 
     # Run the terminal UI (this blocks until investigation completes)
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "resq_terminal",
-        os.path.join(os.path.dirname(__file__), "resq_terminal.py")
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    mod.main()
+    from demo import resq_terminal
+    resq_terminal.main()
 
 
 if __name__ == "__main__":

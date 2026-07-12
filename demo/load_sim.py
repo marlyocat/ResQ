@@ -1,18 +1,20 @@
-"""Load Simulator — hammers the target service to trigger an incident.
+"""Load Simulator - hammers the target service to trigger an incident.
 
 Usage:
     python demo/load_sim.py
 
 Sends requests for ~50 seconds:
   0-15s   → normal traffic (~5 req/s)
-  15s     → triggers degradation (service starts failing)
-  15-50s  → heavy traffic (~15 req/s) — watch the dashboard light up
+  15-50s  → heavy traffic (~15 req/s)
+
+Note: Does NOT trigger degradation - each scenario handles its own failure mode.
 """
 
 import requests
 import threading
 import time
 import sys
+import random
 
 TARGET = "http://localhost:5000"
 stop = False
@@ -32,15 +34,13 @@ def _worker():
         time.sleep(random.uniform(0.03, 0.12))
 
 
-import random
-
 print("=" * 50)
 print("  ResQ Load Simulator")
 print("=" * 50)
 print()
 
 # Phase 1: normal traffic
-print("[Phase 1] Normal traffic — 5 workers, ~5 req/s")
+print("[Phase 1] Normal traffic - 5 workers, ~5 req/s")
 threads = []
 for _ in range(5):
     t = threading.Thread(target=_worker, daemon=True)
@@ -49,18 +49,8 @@ for _ in range(5):
 
 time.sleep(15)
 
-# Phase 2: trigger degradation
-print("[Phase 2] Triggering degradation...")
-try:
-    requests.post(f"{TARGET}/api/degrade", timeout=5)
-    print("         Service is now DEGRADED")
-except Exception as e:
-    print(f"         Failed to degrade: {e}")
-    print("         Is the target service running on :5000?")
-    sys.exit(1)
-
-# Phase 3: heavy traffic
-print("[Phase 3] Heavy traffic — 15 workers, ~15 req/s")
+# Phase 2: heavy traffic (no degradation trigger - scenario handles failure)
+print("[Phase 2] Heavy traffic - 15 workers, ~15 req/s")
 for _ in range(10):
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
@@ -71,11 +61,6 @@ try:
 except KeyboardInterrupt:
     pass
 
-# Recover
-print("[Done] Recovering service...")
+# Stop
+print("[Done] Load sim finished.")
 stop = True
-try:
-    requests.post(f"{TARGET}/api/recover", timeout=5)
-except Exception:
-    pass
-print("       Load sim finished.")

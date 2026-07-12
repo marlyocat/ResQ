@@ -49,15 +49,25 @@ AGENT_ICONS = {
     "Post-Mortem Writer": "📋",
 }
 
-# ── Qwen Client ──────────────────────────────────────────────────────
+#  Qwen Client ──────────────────────────────────────────────────────
+# Add project root to path for imports
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Load environment variables from .env
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+
 try:
     from integrations.qwen_client import QwenClient
     import asyncio
     qwen = QwenClient()
     QWEN_AVAILABLE = True
-except Exception:
+except Exception as e:
     qwen = None
     QWEN_AVAILABLE = False
+    print(f"Qwen API not available: {e}")
 
 # ── Shared State ─────────────────────────────────────────────────────
 state = {
@@ -154,12 +164,14 @@ def _call_qwen(system_prompt, user_input):
         return None
     try:
         loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         result = loop.run_until_complete(
             qwen.analyze_with_context(system_prompt=system_prompt, user_input=user_input)
         )
         loop.close()
         return result.get("raw_response", "")
-    except Exception:
+    except Exception as e:
+        print(f"Qwen API error: {e}")
         return None
 
 
@@ -209,66 +221,11 @@ def run_log_analyzer(logs_data):
             except (json.JSONDecodeError, KeyError):
                 pass
 
-    time.sleep(1.5)
-    # Build evidence from actual logs
-    import re
-    evidence = []
-    code_locations = []
-    stack_traces = []
-    error_logs = [e for e in logs_data if e.get("level") in ("ERROR", "CRITICAL")]
-    if error_logs:
-        evidence.append(f"{len(error_logs)} error/critical log entries found")
-        messages = [e.get("message", "") for e in error_logs]
-        if any("pool" in m.lower() or "connection" in m.lower() for m in messages):
-            evidence.append("Connection/pool-related errors detected")
-        if any("timeout" in m.lower() for m in messages):
-            evidence.append("Timeout errors detected")
-        
-        # Extract code locations from log messages
-        for msg in messages[:5]:
-            match = re.search(r'\[file:([^,\]]+),\s*func:([^,\]]+),\s*line:(\d+)\]', msg)
-            if match:
-                code_locations.append({
-                    "file": match.group(1),
-                    "function": match.group(2),
-                    "line": int(match.group(3))
-                })
-            
-            # Extract stack traces (lines starting with "Traceback" or "  File")
-            if "Traceback" in msg or "  File \"" in msg:
-                stack_lines = msg.split("\n")
-                stack_context = []
-                capturing = False
-                for line in stack_lines:
-                    if "Traceback" in line or line.strip().startswith("File \""):
-                        capturing = True
-                    if capturing:
-                        stack_context.append(line.strip()[:80])
-                    if capturing and line.strip() and not line.startswith(" ") and "Traceback" not in line and "File \"" not in line:
-                        break
-                if stack_context:
-                    stack_traces.append("\n".join(stack_context[:8]))
-    
-    if not evidence:
-        evidence.append(f"{len(logs_data)} log entries analyzed")
-
-    finding = {
-        "cause": "Error patterns detected in application logs",
-        "confidence": 0.88,
-        "evidence": evidence,
-        "severity": "high",
-    }
-    if code_locations:
-        finding["code_location"] = code_locations[0]
-        source = _read_source_code(code_locations[0]["file"], code_locations[0]["line"])
-        finding["source_code"] = source
-    if stack_traces:
-        finding["stack_traces"] = stack_traces[:2]  # Keep first 2 stack traces
-
-    agent["findings"] = [finding]
+    # No fallback - analysis requires Qwen API
     agent["status"] = "done"
-    agent["message"] = f"Produced 1 hypothesis from {len(logs_data)} logs"
-    add_event("Log Analyzer", f"Produced 1 hypothesis from actual logs")
+    agent["message"] = "Analysis unavailable - Qwen API required"
+    agent["findings"] = [{"cause": "Analysis unavailable", "confidence": 0, "evidence": ["Qwen API not available or response parsing failed"], "severity": "unknown"}]
+    add_event("Log Analyzer", "Analysis unavailable - Qwen API required")
 
 
 def run_metric_monitor(metrics_data):
@@ -309,29 +266,11 @@ def run_metric_monitor(metrics_data):
             except (json.JSONDecodeError, KeyError):
                 pass
 
-    # Fallback: build evidence from actual metrics data
-    time.sleep(1.5)
-    evidence = []
-    if metrics_data:
-        errors = [m.get("error_rate", 0) for m in metrics_data]
-        p99s = [m.get("p99_latency_ms", 0) for m in metrics_data]
-        cpus = [m.get("cpu_pct", 0) for m in metrics_data]
-        if max(errors) > 5:
-            evidence.append(f"Error rate peaked at {max(errors):.1f}%")
-        if max(p99s) > 500:
-            evidence.append(f"P99 latency reached {max(p99s):.0f}ms")
-        if max(cpus) > 50:
-            evidence.append(f"CPU usage at {max(cpus):.1f}%")
-        if not evidence:
-            evidence.append("Metrics anomaly detected in incident window")
-
-    agent["findings"] = [
-        {"cause": "Service degradation detected in metrics", "confidence": 0.85,
-         "evidence": evidence, "severity": "high"},
-    ]
+    # No fallback - analysis requires Qwen API
     agent["status"] = "done"
-    agent["message"] = "Produced 1 hypothesis from actual metrics"
-    add_event("Metric Monitor", "Produced 1 hypothesis from actual metrics")
+    agent["message"] = "Analysis unavailable - Qwen API required"
+    agent["findings"] = [{"cause": "Analysis unavailable", "confidence": 0, "evidence": ["Qwen API not available or response parsing failed"], "severity": "unknown"}]
+    add_event("Metric Monitor", "Analysis unavailable - Qwen API required")
 
 
 def run_coordinator(log_hyps, met_hyps):
@@ -363,17 +302,12 @@ def run_coordinator(log_hyps, met_hyps):
             except (json.JSONDecodeError, KeyError):
                 pass
 
-    time.sleep(2)
-    state["root_cause"] = {"cause": "Database connection pool exhaustion", "confidence": 0.89, "severity": "critical"}
-    state["action_plan"] = {"steps": [
-        "Investigate current database connection pool configuration and limits",
-        "Review slow query logs to identify queries holding connections too long",
-        "Monitor connection pool utilization after identifying bottleneck",
-        "Validate connection release behavior in application code",
-    ]}
+    # No fallback - analysis requires Qwen API
     agent["status"] = "done"
-    agent["message"] = "Root cause determined"
-    add_event("Coordinator", "Root cause determined")
+    agent["message"] = "Analysis unavailable - Qwen API required"
+    state["root_cause"] = {"cause": "Analysis unavailable", "confidence": 0, "severity": "unknown"}
+    state["action_plan"] = {"steps": []}
+    add_event("Coordinator", "Analysis unavailable - Qwen API required")
 
 
 def run_remediation(action_plan):
@@ -383,14 +317,21 @@ def run_remediation(action_plan):
     agent["message"] = f"Executing {len(steps)} remediation steps..."
     add_event("Runbook Executor", f"Executing {len(steps)} remediation steps")
 
-    for i, step in enumerate(steps):
-        time.sleep(0.8)
-        agent["message"] = f"Step {i+1}/{len(steps)}: {step[:50]}..."
-        add_event("Runbook Executor", f"Step {i+1}/{len(steps)}: {step}")
+    if QWEN_AVAILABLE and steps:
+        agent["message"] = "Calling Qwen API..."
+        add_event("Runbook Executor", "Simulating execution with Qwen Cloud API")
+        user_input = f"Simulate executing these remediation steps and report results:\n\n" + "\n".join(f"{i+1}. {s}" for i, s in enumerate(steps))
+        raw = _call_qwen("You are an operations engineer executing remediation steps. Report success/failure for each step.", user_input)
+        if raw:
+            agent["status"] = "done"
+            agent["message"] = f"All {len(steps)} steps completed (Qwen API)"
+            add_event("Runbook Executor", f"All {len(steps)} steps completed (Qwen API)")
+            return
 
+    # No fallback - requires Qwen API
     agent["status"] = "done"
-    agent["message"] = f"All {len(steps)} steps completed"
-    add_event("Runbook Executor", f"All {len(steps)} steps completed")
+    agent["message"] = "Analysis unavailable - Qwen API required"
+    add_event("Runbook Executor", "Analysis unavailable - Qwen API required")
 
 
 def run_postmortem():
@@ -400,10 +341,82 @@ def run_postmortem():
     add_event("Post-Mortem Writer", "Generating comprehensive incident report")
 
     if QWEN_AVAILABLE:
+        # Build comprehensive context from actual data
         transcript = "\n".join(f"[{e['time']}] {e['agent']}: {e['message']}" for e in state["events"])
+        
+        # Add actual metrics data
+        metrics_summary = ""
+        if state["peak_metrics"]:
+            pm = state["peak_metrics"]
+            metrics_summary = f"""
+INCIDENT METRICS (Peak Values):
+- Error Rate: {pm.get('error_rate', 0):.1f}%
+- CPU Usage: {pm.get('cpu_pct', 0):.1f}%
+- Memory: {pm.get('memory_mb', 0):.0f} MB
+- P50 Latency: {pm.get('p50_latency_ms', 0):.0f} ms
+- P95 Latency: {pm.get('p95_latency_ms', 0):.0f} ms
+- P99 Latency: {pm.get('p99_latency_ms', 0):.0f} ms
+- Total Requests: {pm.get('request_count', 0)}
+- Queue Errors: {pm.get('queue_errors', 0)}
+- Cache Hit Rate: {pm.get('cache_hit_rate', 0):.0f}%
+"""
+
+        # Add agent findings
+        findings_summary = ""
+        for agent_name in ["log_analyzer", "metric_monitor", "coordinator"]:
+            agent_data = state["agents"].get(agent_name, {})
+            if agent_data.get("findings"):
+                findings_summary += f"\n{agent_name.upper()} FINDINGS:\n"
+                for f in agent_data["findings"]:
+                    findings_summary += f"- Cause: {f.get('cause', 'Unknown')}\n"
+                    findings_summary += f"  Confidence: {int(f.get('confidence', 0) * 100)}%\n"
+                    if f.get("evidence"):
+                        findings_summary += f"  Evidence: {', '.join(f['evidence'])}\n"
+                    if f.get("code_location"):
+                        loc = f["code_location"]
+                        findings_summary += f"  Code: {loc.get('file')}:{loc.get('line')} ({loc.get('function')})\n"
+
+        # Add root cause and action plan
+        root_cause_summary = ""
+        if state.get("root_cause"):
+            rc = state["root_cause"]
+            root_cause_summary = f"""
+ROOT CAUSE DETERMINED:
+- Cause: {rc.get('cause', 'Unknown')}
+- Confidence: {int(rc.get('confidence', 0) * 100)}%
+- Severity: {rc.get('severity', 'unknown').upper()}
+"""
+
+        action_plan_summary = ""
+        if state.get("action_plan", {}).get("steps"):
+            action_plan_summary = "\nACTION PLAN:\n"
+            for i, step in enumerate(state["action_plan"]["steps"], 1):
+                action_plan_summary += f"{i}. {step}\n"
+
+        prompt = f"""Generate a comprehensive incident post-mortem report based on the ACTUAL data below.
+
+INCIDENT TIMELINE:
+{transcript}
+
+{metrics_summary}
+{findings_summary}
+{root_cause_summary}
+{action_plan_summary}
+
+Write a professional post-mortem with:
+1. Executive Summary
+2. Incident Timeline (with actual timestamps)
+3. Root Cause Analysis (based on actual findings)
+4. Impact Assessment (use actual metric values)
+5. Resolution (what was actually done)
+6. Action Items (based on the actual action plan)
+7. Lessons Learned
+
+Be specific and reference actual data points."""
+
         raw = _call_qwen(
-            "You are a technical writer. Generate a post-mortem with: Summary, Timeline, Root Cause, Impact, Action Items.",
-            f"Generate a post-mortem:\n\n{transcript}"
+            "You are a technical writer creating an incident post-mortem. Use ONLY the actual data provided - do not invent or assume any information.",
+            prompt
         )
         if raw:
             state["postmortem"] = raw
@@ -412,11 +425,11 @@ def run_postmortem():
             add_event("Post-Mortem Writer", "Report generated (Qwen API)")
             return
 
-    time.sleep(2)
-    state["postmortem"] = "## Incident Summary\nDatabase connection pool exhaustion caused cascading failure.\n\n## Action Items\n1. Increase pool size\n2. Add query timeout\n3. Add monitoring alerts"
+    # No fallback - requires Qwen API
     agent["status"] = "done"
-    agent["message"] = "Report generated"
-    add_event("Post-Mortem Writer", "Report generated")
+    agent["message"] = "Analysis unavailable - Qwen API required"
+    state["postmortem"] = "Post-mortem generation requires Qwen API."
+    add_event("Post-Mortem Writer", "Analysis unavailable - Qwen API required")
 
 
 def run_investigation(logs_snapshot, metrics_snapshot):
@@ -480,6 +493,8 @@ class MetricsWidget(Static):
                 f"[bold]CPU Usage:[/bold]       [{cpu_c}]{cpu:.1f}%[/{cpu_c}]",
                 f"[bold]Memory (RSS):[/bold]    [{mem_c}]{mem:.0f} MB[/{mem_c}]",
                 f"[bold]Cache Hit Rate:[/bold]  {pm.get('cache_hit_rate', 0):.0f}%",
+                f"[bold]Queue Status:[/bold]    {'OK' if pm.get('queue_healthy', True) else 'FAILED'}",
+                f"[bold]Queue Errors:[/bold]    {pm.get('queue_errors', 0)}",
                 f"[bold]P50 Latency:[/bold]     {p50:.0f} ms",
                 f"[bold]P95 Latency:[/bold]     [{p95_c}]{p95:.0f} ms[/{p95_c}]",
                 f"[bold]P99 Latency:[/bold]     [{p99_c}]{p99:.0f} ms[/{p99_c}]",
@@ -550,35 +565,35 @@ class AgentsWidget(Static):
             lines.append(f"{icon_status} [{color}]{icon} {name}[/{color}]  [dim]{agent['message']}[/dim]")
 
             if agent["findings"] and status == "done":
-                for f in agent["findings"][:2]:
+                for f in agent["findings"]:
                     cause = f.get("cause", "Unknown")
                     conf = int(f.get("confidence", 0) * 100)
                     conf_c = "red" if conf > 80 else "yellow" if conf > 60 else "green"
-                    lines.append(f"    [bold]{cause[:55]}[/bold]")
+                    lines.append(f"    [bold]{cause}[/bold]")
                     lines.append(f"    [dim]Confidence:[/dim] [{conf_c}]{conf}%[/{conf_c}]")
-                    
+
                     # Show code location if available
                     code_loc = f.get("code_location")
                     if code_loc:
                         loc_str = f"{code_loc.get('file', '?')}:{code_loc.get('line', '?')}"
                         func = code_loc.get('function', '')
                         lines.append(f"    [bold yellow]Code:[/bold yellow] {loc_str} ({func})")
-                    
+
                     # Show source code snippet if available
                     source = f.get("source_code")
                     if source:
                         lines.append(f"    [dim]Source:[/dim]")
-                        for src_line in source.split("\n")[:6]:
+                        for src_line in source.split("\n"):
                             lines.append(f"    [dim]{src_line}[/dim]")
-                    
+
                     # Show stack traces if available
                     stacks = f.get("stack_traces", [])
                     if stacks:
                         lines.append(f"    [bold red]Stack Trace:[/bold red]")
-                        for stack in stacks[:1]:
-                            for st_line in stack.split("\n")[:6]:
-                                lines.append(f"    [red]{st_line[:70]}[/red]")
-                    
+                        for stack in stacks:
+                            for st_line in stack.split("\n"):
+                                lines.append(f"    [red]{st_line}[/red]")
+
                     # Show analysis/explanation if available
                     analysis = f.get("analysis")
                     if analysis:
@@ -594,9 +609,9 @@ class AgentsWidget(Static):
                                 current_line = f"{current_line} {word}" if current_line else word
                         if current_line:
                             lines.append(f"    [cyan]{current_line}[/cyan]")
-                    
-                    for ev in f.get("evidence", [])[:2]:
-                        lines.append(f"    [dim]  • {ev[:50]}[/dim]")
+
+                    for ev in f.get("evidence", []):
+                        lines.append(f"    [dim]  • {ev}[/dim]")
             lines.append("")
 
         self.update("\n".join(lines))
@@ -662,7 +677,7 @@ class RootCauseWidget(Static):
         if pm:
             lines.append("")
             lines.append("[bold cyan]Post-Mortem:[/bold cyan]")
-            lines.append(f"[dim]{pm[:500]}[/dim]")
+            lines.append(f"[dim]{pm}[/dim]")
 
         self.update("\n".join(lines))
 
@@ -695,6 +710,9 @@ class ResQApp(App):
     CSS = """
     Screen {
         background: $surface;
+    }
+    * {
+        scrollbar-size: 0 0;
     }
     #main-scroll {
         height: 1fr;
@@ -775,7 +793,7 @@ class ResQApp(App):
                     # Track peak metrics during incident
                     if state["status"] in ("incident", "investigating"):
                         pm = state["peak_metrics"]
-                        for key in ("error_rate", "cpu_pct", "memory_mb", "p50_latency_ms", "p95_latency_ms", "p99_latency_ms", "request_count"):
+                        for key in ("error_rate", "cpu_pct", "memory_mb", "p50_latency_ms", "p95_latency_ms", "p99_latency_ms", "request_count", "queue_errors"):
                             val = m.get(key, 0)
                             if val > pm.get(key, 0):
                                 pm[key] = val
