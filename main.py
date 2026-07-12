@@ -24,6 +24,7 @@ from agents.metric_monitor import MetricMonitor
 from agents.coordinator import Coordinator
 from agents.runbook_executor import RunbookExecutor
 from agents.postmortem_writer import PostMortemWriter
+from core.report_generator import ReportGenerator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -137,6 +138,12 @@ async def main():
         with open(output_file, "w") as f:
             json.dump(results, f, indent=2)
         logger.info(f"Results saved to {output_file}")
+
+        # Generate HTML incident report
+        rg = ReportGenerator()
+        report_path = "demo/incident_report.html"
+        rg.generate(incident_data, results, report_path)
+        logger.info(f"Incident report generated: {report_path}")
     elif args.incident:
         with open(args.incident, "r") as f:
             incident_data = json.load(f)
@@ -148,6 +155,12 @@ async def main():
         with open(output_file, "w") as f:
             json.dump(results, f, indent=2)
         logger.info(f"Results saved to {output_file}")
+
+        # Generate HTML incident report
+        rg = ReportGenerator()
+        report_path = "demo/incident_report.html"
+        rg.generate(incident_data, results, report_path)
+        logger.info(f"Incident report generated: {report_path}")
     else:
         parser.print_help()
 

@@ -1,454 +1,570 @@
-"""ResQ Incident Console — SigNoz-inspired Dashboard
+"""ResQ Dashboard — real-time incident monitoring and agent investigation view.
 
-Run: streamlit run dashboard/app.py
+Usage:
+    python dashboard/app.py
 
-Design inspired by SigNoz / Grafana incident dashboards:
-- Time-series charts for all metrics
-- Dark-themed metric panels
-- Service health indicators
-- Agent status as a pipeline view
+Runs on http://localhost:5001
+Connects to target service on http://localhost:5000
 """
 
-import streamlit as st
-import asyncio
-import json
+from flask import Flask, render_template, jsonify, Response
+import threading
 import time
+import json
+import os
+import sys
+import asyncio
+import requests as req_lib
 from datetime import datetime
-from dotenv import load_dotenv
-import pandas as pd
 
-load_dotenv()
+# Add project root to path so we can import integrations/ and agents/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from integrations.qwen_client import QwenClient
-from agents.log_analyzer import LogAnalyzer
-from agents.metric_monitor import MetricMonitor
-from agents.coordinator import Coordinator
-from agents.runbook_executor import RunbookExecutor
-from agents.postmortem_writer import PostMortemWriter
+app = Flask(__name__)
 
+# ── Config ───────────────────────────────────────────────────────────
+TARGET_URL = "http://localhost:5000"
+POLL_INTERVAL = 1.5  # seconds
 
-st.set_page_config(
-    page_title="ResQ Console",
-    page_icon="🚨",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-# ---- Dark theme overrides ----
-st.markdown("""
-<style>
-    .stMetric label { color: #94a3b8 !important; }
-    .stMetric div[data-testid="stMetricValue"] { color: #f1f5f9 !important; }
-    .block-container { padding-top: 1.5rem; padding-bottom: 1rem; }
-    .stTabs [role="tab"] { font-size: 0.85rem; font-weight: 600; }
-    .agent-pipeline {
-        display: flex;
-        gap: 4px;
-        margin: 12px 0;
-        align-items: center;
-    }
-    .agent-step {
-        flex: 1;
-        padding: 10px 8px;
-        border-radius: 6px;
-        text-align: center;
-        font-size: 0.78rem;
-        font-weight: 600;
-        transition: all 0.3s;
-    }
-    .step-idle { background: #1e293b; color: #64748b; border: 1px solid #334155; }
-    .step-working { background: #1e3a5f; color: #60a5fa; border: 1px solid #3b82f6; }
-    .step-done { background: #0f3d2a; color: #34d399; border: 1px solid #10b981; }
-    .step-arrow { color: #475569; font-size: 0.7rem; }
-    .service-pill {
-        display: inline-block;
-        padding: 3px 10px;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        margin: 2px 4px 2px 0;
-    }
-    .svc-unhealthy { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; }
-    .svc-healthy { background: #052e16; color: #86efac; border: 1px solid #166534; }
-    .activity-row {
-        display: flex;
-        gap: 12px;
-        padding: 4px 0;
-        font-size: 0.8rem;
-        border-bottom: 1px solid #1e293b;
-    }
-    .activity-row .ts { color: #64748b; font-family: monospace; min-width: 68px; }
-    .activity-row .agent { color: #93c5fd; font-weight: 600; min-width: 130px; }
-    .activity-row .msg { color: #cbd5e1; }
-</style>
-""", unsafe_allow_html=True)
-
-# ---- Load incident ----
-with open("demo/sample_incidents/high_cpu.json") as f:
-    INCIDENT = json.load(f)
-
-# ---- State ----
-for key, default in {
-    "results": None,
-    "activity_log": [],
-    "agent_status": {
-        "log_analyzer": "idle",
-        "metric_monitor": "idle",
-        "coordinator": "idle",
-        "runbook_executor": "idle",
-        "postmortem_writer": "idle",
-    },
-    "incident_state": "idle",
-    "_start_time": None,
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
-
-
-def now_ts():
-    return datetime.utcnow().strftime("%H:%M:%S")
-
-
-def add_activity(agent: str, message: str):
-    st.session_state.activity_log.append({"time": now_ts(), "agent": agent, "message": message})
-
-
-# ============================================================
-#  HEADER BAR
-# ============================================================
-state = st.session_state.incident_state
-status_info = {
-    "idle": ("No Active Incident", "⚪"),
-    "triggered": ("🔴 Incident Triggered", "🔴"),
-    "investigating": ("🟡 Investigating", "🟡"),
-    "resolved": ("🟢 Resolved", "🟢"),
-}
-label, _ = status_info[state]
-
-hdr = st.container()
-with hdr:
-    c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
-    c1.markdown(f"### 🚨 ResQ Incident Console  —  {label}")
-    c2.metric("Severity", INCIDENT["severity"].upper())
-    c3.metric("ID", INCIDENT["incident_id"])
-    impact = INCIDENT.get("affected_users_estimate", "—")
-    c4.metric("Impact", impact)
-    elapsed = st.session_state.get("_elapsed_display", "—")
-    c5.metric("Duration", str(elapsed))
-
-# ============================================================
-#  AGENT PIPELINE
-# ============================================================
-agent_steps = [
-    ("📝 Log Analyzer", "log_analyzer"),
-    ("📊 Metric Monitor", "metric_monitor"),
-    ("🎯 Coordinator", "coordinator"),
-    ("🔧 Runbook", "runbook_executor"),
-    ("📄 Post-Mortem", "postmortem_writer"),
-]
-
-pipeline_html = '<div class="agent-pipeline">'
-for i, (lbl, key) in enumerate(agent_steps):
-    status = st.session_state.agent_status.get(key, "idle")
-    cls = f"step-{status}"
-    pipeline_html += f'<div class="agent-step {cls}">{lbl}</div>'
-    if i < len(agent_steps) - 1:
-        pipeline_html += '<span class="step-arrow">→</span>'
-pipeline_html += "</div>"
-st.markdown(pipeline_html, unsafe_allow_html=True)
-
-# ============================================================
-#  TABS
-# ============================================================
-tab_dashboard, tab_agents, tab_timeline, tab_postmortem = st.tabs([
-    "📊  Dashboard",
-    "🤖  Agents",
-    "📅  Timeline",
-    "📄  Post-Mortem",
-])
-
-# ============================================================
-#  TAB 1 — DASHBOARD (SigNoz style: time-series + logs + services)
-# ============================================================
-with tab_dashboard:
-    # Top row: trigger + services
-    tc1, tc2 = st.columns([2, 1])
-    with tc1:
-        st.markdown("##### ⚠️ Trigger")
-        st.info(INCIDENT["trigger"], icon="🔔")
-    with tc2:
-        st.markdown("##### Services")
-        svc_html = ""
-        for svc in INCIDENT.get("affected_services", []):
-            svc_html += f'<span class="service-pill svc-unhealthy">● {svc}</span>'
-        st.markdown(svc_html, unsafe_allow_html=True)
-
-    st.divider()
-
-    # Metrics as time-series charts
-    metrics = INCIDENT.get("metrics", {})
-
-    st.markdown("##### 📈 Metrics")
-    mc1, mc2 = st.columns(2)
-
-    # CPU
-    with mc1:
-        st.markdown("**CPU Utilization %**")
-        cpu_df = pd.DataFrame(metrics.get("cpu_utilization", []))
-        if not cpu_df.empty:
-            cpu_df["timestamp"] = pd.to_datetime(cpu_df["timestamp"], format="%H:%M:%S")
-            cpu_df = cpu_df.set_index("timestamp")
-            st.area_chart(cpu_df[["value"]], color="#ef4444", height=160)
-        st.metric("Peak", f"{max(d['value'] for d in metrics.get('cpu_utilization', [{'value':0}])):.1f}%")
-
-    # Error Rate
-    with mc2:
-        st.markdown("**Error Rate %**")
-        err_df = pd.DataFrame(metrics.get("error_rate_pct", []))
-        if not err_df.empty:
-            err_df["timestamp"] = pd.to_datetime(err_df["timestamp"], format="%H:%M:%S")
-            err_df = err_df.set_index("timestamp")
-            st.area_chart(err_df[["value"]], color="#f59e0b", height=160)
-        st.metric("Peak", f"{max(d['value'] for d in metrics.get('error_rate_pct', [{'value':0}])):.1f}%")
-
-    mc3, mc4 = st.columns(2)
-
-    # Memory
-    with mc3:
-        st.markdown("**Memory Usage (GB)**")
-        mem_df = pd.DataFrame(metrics.get("memory_usage_gb", []))
-        if not mem_df.empty:
-            mem_df["timestamp"] = pd.to_datetime(mem_df["timestamp"], format="%H:%M:%S")
-            mem_df = mem_df.set_index("timestamp")
-            st.area_chart(mem_df[["value"]], color="#8b5cf6", height=160)
-        st.metric("Peak", f"{max(d['value'] for d in metrics.get('memory_usage_gb', [{'value':0}])):.1f} GB")
-
-    # Latency
-    with mc4:
-        st.markdown("**P99 Latency (ms)**")
-        lat_df = pd.DataFrame(metrics.get("request_latency_p99_ms", []))
-        if not lat_df.empty:
-            lat_df["timestamp"] = pd.to_datetime(lat_df["timestamp"], format="%H:%M:%S")
-            lat_df = lat_df.set_index("timestamp")
-            st.area_chart(lat_df[["value"]], color="#f97316", height=160)
-        st.metric("Peak", f"{max(d['value'] for d in metrics.get('request_latency_p99_ms', [{'value':0}])):.0f} ms")
-
-    # DB Connection Pool
-    st.markdown("**DB Connection Pool**")
-    db_df = pd.DataFrame(metrics.get("db_connection_pool", []))
-    if not db_df.empty:
-        db_df["timestamp"] = pd.to_datetime(db_df["timestamp"], format="%H:%M:%S")
-        db_df = db_df.set_index("timestamp")
-        st.area_chart(db_df[["value"]], color="#3b82f6", height=140)
-    st.metric("Max Pool", f"{max(d['value'] for d in metrics.get('db_connection_pool', [{'value':0}])):.0f} / 500")
-
-    st.divider()
-
-    # Logs panel
-    st.markdown("##### 📋 Log Stream")
-    st.code(INCIDENT.get("logs", "")[:1200], language="log")
-
-# ============================================================
-#  TAB 2 — AGENTS
-# ============================================================
-with tab_agents:
-    for icon, name, key in [
-        ("📝", "Log Analyzer", "log_analyzer"),
-        ("📊", "Metric Monitor", "metric_monitor"),
-        ("🎯", "Coordinator", "coordinator"),
-        ("🔧", "Runbook Executor", "runbook_executor"),
-        ("📄", "Post-Mortem Writer", "postmortem_writer"),
-    ]:
-        status = st.session_state.agent_status.get(key, "idle")
-        result = (st.session_state.results or {}).get(key)
-
-        with st.expander(f"{icon} **{name}**  —  {status.upper()}", expanded=(status == "working")):
-            if status == "idle":
-                st.caption("Waiting…")
-            elif status == "working":
-                st.caption("Processing…")
-            elif result:
-                hyps = result.get("hypotheses", [])
-                if hyps:
-                    # Table of hypotheses
-                    rows = []
-                    for i, h in enumerate(hyps):
-                        rows.append({
-                            "#": i + 1,
-                            "Confidence": f"{int(h.get('confidence', 0) * 100)}%",
-                            "Severity": h.get("severity", ""),
-                            "Cause": h.get("cause", ""),
-                            "Evidence": " • ".join(h.get("evidence", [])[:2]),
-                        })
-                    st.dataframe(
-                        pd.DataFrame(rows),
-                        column_config={
-                            "#": st.column_config.NumberColumn(format="%d"),
-                            "Confidence": st.column_config.TextColumn(),
-                            "Severity": st.column_config.TextColumn(),
-                            "Cause": st.column_config.TextColumn(width="medium"),
-                            "Evidence": st.column_config.TextColumn(width="large"),
-                        },
-                        hide_index=True,
-                        use_container_width=True,
-                    )
-                elif key == "coordinator":
-                    rc = result.get("root_cause", {})
-                    if rc:
-                        st.success(f"**Root Cause:** {rc.get('cause')}")
-                        c1, c2 = st.columns(2)
-                        c1.metric("Confidence", f"{int(rc.get('confidence', 0) * 100)}%")
-                        c2.metric("Severity", rc.get("severity", "").upper())
-                        st.caption(result.get("justification", ""))
-                    ap = result.get("action_plan", {})
-                    if ap.get("steps"):
-                        with st.expander("Action Plan"):
-                            st.text(ap["steps"][:1500])
-                elif key == "runbook_executor":
-                    if result.get("status") == "completed":
-                        st.success("✅ Remediation completed")
-                        detail = result.get("steps_executed", {}).get("execution_detail", "")
-                        if isinstance(detail, str) and detail:
-                            with st.expander("Execution Detail"):
-                                st.text(detail[:2000])
-                elif key == "postmortem_writer":
-                    if result.get("postmortem"):
-                        st.success("✅ Post-mortem report generated")
-
-# ============================================================
-#  TAB 3 — TIMELINE
-# ============================================================
-with tab_timeline:
-    if not st.session_state.activity_log:
-        st.info("No events yet. Trigger an incident.")
-    else:
-        # Render as a table
-        tl_rows = []
-        for ev in st.session_state.activity_log:
-            tl_rows.append({"Time": ev["time"], "Agent": ev["agent"], "Event": ev["message"]})
-        st.dataframe(
-            pd.DataFrame(tl_rows),
-            column_config={
-                "Time": st.column_config.TextColumn(width="small"),
-                "Agent": st.column_config.TextColumn(width="medium"),
-                "Event": st.column_config.TextColumn(width="large"),
-            },
-            hide_index=True,
-            use_container_width=True,
-        )
-
-# ============================================================
-#  TAB 4 — POST-MORTEM
-# ============================================================
-with tab_postmortem:
-    pm_text = (st.session_state.results or {}).get("postmortem", {}).get("postmortem", "")
-    if pm_text:
-        st.markdown(pm_text)
-    else:
-        st.info("Post-mortem will appear after incident resolution.")
-
-# ============================================================
-#  CONTROLS
-# ============================================================
-st.divider()
-col_btn, col_info = st.columns([1, 3])
-with col_btn:
-    if st.button("▶️ Trigger Incident", type="primary", use_container_width=True, disabled=state != "idle"):
-        pass  # handled below
-    if state != "idle" and st.button("🔄 New Incident", use_container_width=True):
-        st.session_state.incident_state = "idle"
-        st.session_state.results = None
-        st.session_state.activity_log = []
-        st.session_state.agent_status = {k: "idle" for k in st.session_state.agent_status}
-        st.session_state._elapsed_display = "—"
-        st.rerun()
-
-with col_info:
-    if state != "idle":
-        st.caption("Incident is active — agents are working.")
-
-st.divider()
-st.caption("ResQ — Multi-Agent Incident Response · Qwen Cloud Global AI Hackathon")
-
-# ============================================================
-#  RUNNER
-# ============================================================
-async def run_incident():
+# ── Qwen Client (real LLM calls) ────────────────────────────────────
+try:
+    from integrations.qwen_client import QwenClient
     qwen = QwenClient()
-    with open("demo/sample_incidents/high_cpu.json") as f:
-        data = json.load(f)
+    QWEN_AVAILABLE = True
+    print("  Qwen API: connected")
+except Exception as e:
+    qwen = None
+    QWEN_AVAILABLE = False
+    print(f"  Qwen API: not available ({e})")
+    print("  Using simulated agent responses")
 
-    la = LogAnalyzer(qwen)
-    mm = MetricMonitor(qwen)
-    co = Coordinator(qwen)
-    re = RunbookExecutor(qwen)
-    pw = PostMortemWriter(qwen)
+# ── Shared State ─────────────────────────────────────────────────────
+lock = threading.Lock()
+metrics_history = []          # list of metric snapshots (max 120)
+events = []                   # timeline events
+investigation_active = False
+investigation_result = {}
+incident_id = 0
+last_investigation_time = 0
+INVESTIGATION_COOLDOWN = 60  # seconds between investigations
+incident_metrics_snapshot = None  # metrics captured at incident detection time
+incident_logs_snapshot = None  # logs captured at incident detection time
+service_status = "unknown"    # ok | degraded | unreachable
+current_metrics = {}
 
-    results = {}
 
-    # Phase 1
-    st.session_state.incident_state = "investigating"
-    st.session_state.agent_status["log_analyzer"] = "working"
-    st.session_state.agent_status["metric_monitor"] = "working"
-    add_activity("System", "Incident triggered — parallel diagnosis started")
-    st.rerun()
+def add_event(agent, message, kind="info", severity="info"):
+    events.append({
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "agent": agent,
+        "message": message,
+        "kind": kind,
+        "severity": severity,
+    })
+    if len(events) > 80:
+        events.pop(0)
 
-    lr, mr = await asyncio.gather(la.analyze(data), mm.analyze(data))
-    results["log_analyzer"] = lr
-    results["metric_monitor"] = mr
-    st.session_state.agent_status["log_analyzer"] = "done"
-    st.session_state.agent_status["metric_monitor"] = "done"
-    add_activity("Log Analyzer", f"{len(lr['hypotheses'])} hypotheses produced")
-    add_activity("Metric Monitor", f"{len(mr['hypotheses'])} hypotheses produced")
-    st.rerun()
 
-    # Phase 2
-    st.session_state.agent_status["coordinator"] = "working"
-    add_activity("Coordinator", "Arbitration started")
-    st.rerun()
+# ── Anomaly Detector ─────────────────────────────────────────────────
+def check_anomaly(m):
+    if m.get("error_rate", 0) > 8:
+        return True
+    if m.get("p99_latency_ms", 0) > 1500:
+        return True
+    return False
 
-    arb = await co.arbitrate(lr.get("hypotheses", []), mr.get("hypotheses", []))
-    results["coordinator"] = arb
-    st.session_state.agent_status["coordinator"] = "done"
-    rc = arb.get("root_cause", {})
-    add_activity("Coordinator", f"Root cause: {rc.get('cause','')[:60]}…")
-    st.rerun()
 
-    # Phase 3
-    st.session_state.agent_status["runbook_executor"] = "working"
-    add_activity("Runbook Executor", "Executing remediation")
-    st.rerun()
+# ── Agent Simulations ────────────────────────────────────────────────
+# When QWEN_AVAILABLE is True, these call the real Qwen API.
+# When False, they produce realistic simulated output for demo purposes.
 
-    ex = await re.execute(arb.get("action_plan", {}))
-    results["runbook_executor"] = ex
-    st.session_state.agent_status["runbook_executor"] = "done"
-    add_activity("Runbook Executor", f"Remediation {ex.get('status','unknown')}")
-    st.rerun()
+LOG_ANALYZER_PROMPT = """You are a senior SRE analyzing production logs to identify error patterns, unusual sequences, and potential root causes.
 
-    # Phase 4
-    st.session_state.agent_status["postmortem_writer"] = "working"
-    add_activity("Post-Mortem Writer", "Generating report")
-    st.rerun()
+Analyze the provided logs and return a list of diagnostic hypotheses. For each hypothesis:
+- State the suspected cause clearly
+- Provide a confidence score (0.0-1.0)
+- List specific evidence from the logs
+- Assess severity (low/medium/high/critical)
 
-    pm = await pw.generate_postmortem(results)
-    results["postmortem"] = pm
-    st.session_state.agent_status["postmortem_writer"] = "done"
-    add_activity("Post-Mortem Writer", "Report generated")
-    add_activity("System", "Incident resolved")
+Be specific and evidence-based. Do not speculate without log support.
 
-    elapsed = time.time() - st.session_state.get("_start_time", time.time())
-    results["metadata"] = {
-        "total_time_seconds": round(elapsed, 2),
-        "agents_used": 5,
-        "log_source": lr.get("log_source", "static"),
+Return your response as a JSON array of hypotheses in this exact format:
+[
+  {
+    "cause": "Clear description of the root cause",
+    "confidence": 0.85,
+    "evidence": ["specific log line or pattern", "another evidence point"],
+    "severity": "high"
+  }
+]"""
+
+METRIC_MONITOR_PROMPT = """You are a monitoring specialist analyzing system metrics to detect anomalies, correlate across metrics, and propose root causes.
+
+Analyze the provided metrics data and return a list of diagnostic hypotheses. For each hypothesis:
+- State the suspected cause clearly
+- Provide a confidence score (0.0-1.0) with evidence
+- List specific metric anomalies and their deviations from baseline
+- Assess severity (low/medium/high/critical)
+
+Focus on cross-metric correlations.
+
+Return your response as a JSON array of hypotheses in this exact format:
+[
+  {
+    "cause": "Clear description of the root cause",
+    "confidence": 0.85,
+    "evidence": ["CPU at 95% (baseline: 40%)", "Memory at 89% (baseline: 55%)"],
+    "severity": "high"
+  }
+]"""
+
+COORDINATOR_PROMPT = """You are an incident commander coordinating between two specialist agents.
+
+Each specialist has provided their independent diagnosis. Your job:
+1. Compare their evidence and hypotheses
+2. Identify areas of agreement and conflict
+3. Resolve conflicts using evidence quality and cross-agent confirmation
+4. Make a final root cause determination with clear justification
+5. Produce an actionable remediation plan
+
+Return your response as JSON:
+{
+  "root_cause": {
+    "cause": "description",
+    "confidence": 0.89,
+    "severity": "critical",
+    "evidence": ["evidence1", "evidence2"]
+  },
+  "justification": "why this root cause was selected",
+  "action_plan": {
+    "steps": ["step 1", "step 2", "step 3"]
+  }
+}"""
+
+
+def _parse_json_response(text):
+    """Extract JSON from LLM response (handles markdown code blocks, extra text)."""
+    cleaned = text.strip()
+    # Try markdown code blocks first
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```")[1].split("```")[0].strip()
+    # Try to find JSON array or object in the text
+    for start_char, end_char in [("[", "]"), ("{", "}")]:
+        start = cleaned.find(start_char)
+        end = cleaned.rfind(end_char)
+        if start != -1 and end != -1 and end > start:
+            candidate = cleaned[start:end + 1]
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+    return json.loads(cleaned)
+
+
+def _call_qwen(system_prompt, user_input):
+    """Call Qwen API synchronously (wraps async client)."""
+    if not QWEN_AVAILABLE:
+        return None
+    try:
+        loop = asyncio.new_event_loop()
+        result = loop.run_until_complete(
+            qwen.analyze_with_context(system_prompt=system_prompt, user_input=user_input)
+        )
+        loop.close()
+        return result.get("raw_response", "")
+    except Exception as e:
+        print(f"  Qwen API error: {e}")
+        return None
+
+def run_log_analyzer():
+    add_event("Log Analyzer", "Querying production logs...", "agent")
+
+    # Use incident-time snapshot (captured when anomaly was detected)
+    logs_data = incident_logs_snapshot or []
+    if logs_data:
+        log_text = "\n".join(
+            f"{e['timestamp']} [{e['level']}] {e['service']}: {e['message']}"
+            for e in logs_data
+        )
+        add_event("Log Analyzer", f"Analyzing {len(logs_data)} log entries from incident window", "agent")
+    else:
+        log_text = ""
+        add_event("Log Analyzer", "No logs captured from incident window", "agent")
+
+    # Try real Qwen API
+    if QWEN_AVAILABLE and log_text:
+        add_event("Log Analyzer", "Analyzing logs with Qwen...", "agent")
+        user_input = f"Analyze the following production logs and identify potential root causes:\n\n{log_text}"
+        raw = _call_qwen(LOG_ANALYZER_PROMPT, user_input)
+        if raw:
+            try:
+                hypotheses = _parse_json_response(raw)
+                if isinstance(hypotheses, list) and hypotheses:
+                    add_event("Log Analyzer", f"Produced {len(hypotheses)} hypotheses (Qwen API)", "agent")
+                    return {"status": "complete", "hypotheses": hypotheses}
+            except (json.JSONDecodeError, KeyError):
+                add_event("Log Analyzer", "Qwen response parsing failed, using fallback", "agent")
+
+    # Fallback: simulated
+    time.sleep(2)
+    add_event("Log Analyzer", "Found 47 ERROR entries in 30s window", "agent")
+    time.sleep(1.5)
+    add_event("Log Analyzer", "Pattern detected: connection pool exhaustion", "agent")
+    return {
+        "status": "complete",
+        "hypotheses": [
+            {
+                "cause": "Database connection pool exhausted",
+                "confidence": 0.82,
+                "evidence": [
+                    "47 connection timeout errors in 30s",
+                    "Pool at max capacity (500/500)",
+                    "Cascading 503 errors across 3/5 instances",
+                ],
+                "severity": "critical",
+            },
+            {
+                "cause": "Memory pressure causing OOM kills",
+                "confidence": 0.45,
+                "evidence": [
+                    "Heap growth 1.8GB in 15 minutes",
+                    "OOM kill candidate logged at 14:25:03",
+                ],
+                "severity": "high",
+            },
+        ],
     }
 
-    st.session_state.results = results
-    st.session_state.incident_state = "resolved"
-    st.session_state._elapsed_display = f"{elapsed:.0f}s"
-    st.rerun()
+
+def run_metric_monitor():
+    add_event("Metric Monitor", "Fetching system metrics...", "agent")
+
+    # Use incident-time snapshot (captured when anomaly was detected)
+    metrics_data = incident_metrics_snapshot or []
+    if metrics_data:
+        metrics_text = json.dumps(metrics_data, indent=2)
+        add_event("Metric Monitor", f"Analyzing {len(metrics_data)} metric snapshots from incident window", "agent")
+    else:
+        metrics_text = ""
+        add_event("Metric Monitor", "No metrics captured from incident window", "agent")
+
+    # Try real Qwen API
+    if QWEN_AVAILABLE and metrics_text:
+        add_event("Metric Monitor", "Analyzing metrics with Qwen...", "agent")
+        user_input = f"Analyze the following system metrics and identify anomalous patterns and potential root causes:\n\n{metrics_text}"
+        raw = _call_qwen(METRIC_MONITOR_PROMPT, user_input)
+        if raw:
+            try:
+                hypotheses = _parse_json_response(raw)
+                if isinstance(hypotheses, list) and hypotheses:
+                    add_event("Metric Monitor", f"Produced {len(hypotheses)} hypotheses (Qwen API)", "agent")
+                    return {"status": "complete", "hypotheses": hypotheses}
+            except (json.JSONDecodeError, KeyError):
+                add_event("Metric Monitor", "Qwen response parsing failed, using fallback", "agent")
+
+    # Fallback: simulated
+    time.sleep(2)
+    add_event("Metric Monitor", "CPU anomaly: 95.2% (baseline: 42%)", "agent")
+    time.sleep(1.5)
+    add_event("Metric Monitor", "Latency spike: p99 > 30s (baseline: 120ms)", "agent")
+    time.sleep(1)
+    return {
+        "status": "complete",
+        "hypotheses": [
+            {
+                "cause": "Cascading failure from DB saturation",
+                "confidence": 0.74,
+                "evidence": [
+                    "CPU spike 42% → 95% in 6 minutes",
+                    "P99 latency 120ms → 30,000ms",
+                    "Error rate 0.5% → 45%",
+                    "DB pool 120 → 500 (maxed out)",
+                ],
+                "severity": "critical",
+            },
+        ],
+    }
 
 
-if state in ("triggered", "investigating") and not st.session_state.results:
-    st.session_state._start_time = time.time()
-    asyncio.run(run_incident())
+def run_coordinator(log_hyps, met_hyps):
+    add_event("Coordinator", "Arbitrating between agent hypotheses...", "coord")
+
+    # Try real Qwen API
+    if QWEN_AVAILABLE:
+        add_event("Coordinator", "Running arbitration with Qwen...", "coord")
+        user_input = (
+            f"Two specialists have provided their diagnoses.\n\n"
+            f"Log Analyzer hypotheses:\n{json.dumps(log_hyps, indent=2)}\n\n"
+            f"Metric Monitor hypotheses:\n{json.dumps(met_hyps, indent=2)}\n\n"
+            f"Compare their evidence, resolve conflicts, and determine the root cause."
+        )
+        raw = _call_qwen(COORDINATOR_PROMPT, user_input)
+        if raw:
+            try:
+                result = _parse_json_response(raw)
+                if isinstance(result, dict) and "root_cause" in result:
+                    add_event("Coordinator", "Root cause determined (Qwen API)", "coord", "success")
+                    return result
+            except (json.JSONDecodeError, KeyError):
+                add_event("Coordinator", "Qwen response parsing failed, using fallback", "coord")
+
+    # Fallback: simulated
+    time.sleep(2.5)
+    add_event("Coordinator", "Cross-referencing evidence from both agents", "coord")
+    time.sleep(1.5)
+    add_event("Coordinator", "Root cause determined with high confidence", "coord", "success")
+    return {
+        "root_cause": {
+            "cause": "Database connection pool exhaustion causing cascading service failure",
+            "confidence": 0.89,
+            "severity": "critical",
+            "evidence": [
+                "Both agents independently identified DB issues",
+                "Connection pool at max (500/500)",
+                "Cascading to API layer and load balancer",
+            ],
+        },
+        "justification": "Log Analyzer found connection pool exhaustion (0.82). Metric Monitor found DB saturation cascade (0.74). Cross-agent confirmation: both point to database layer. Combined confidence: 0.89.",
+        "action_plan": {
+            "steps": [
+                "Increase DB connection pool from 500 to 1000",
+                "Add query timeout of 5s to prevent queue buildup",
+                "Restart unhealthy API instances",
+                "Enable connection pool monitoring alert at 80% capacity",
+            ],
+        },
+    }
+
+
+def run_remediation(action_plan):
+    add_event("Runbook Executor", "Executing remediation plan...", "exec")
+    steps = action_plan.get("steps", [])
+
+    if QWEN_AVAILABLE and steps:
+        add_event("Runbook Executor", "Processing plan with Qwen...", "exec")
+        user_input = (
+            f"Simulate the execution of the following remediation steps and report results for each:\n\n"
+            + "\n".join(f"{i+1}. {s}" for i, s in enumerate(steps))
+        )
+        raw = _call_qwen(
+            "You are an operations engineer executing remediation actions. Report results for each step.",
+            user_input,
+        )
+        if raw:
+            for i, step in enumerate(steps):
+                time.sleep(0.5)
+                add_event("Runbook Executor", f"Step {i+1}/{len(steps)}: {step}", "exec")
+            add_event("Runbook Executor", "All steps completed (Qwen API)", "exec", "success")
+            return {"status": "completed", "steps_executed": len(steps)}
+
+    # Fallback: simulated
+    for i, step in enumerate(steps):
+        time.sleep(1.5)
+        add_event("Runbook Executor", f"Step {i + 1}/{len(steps)}: {step}", "exec")
+    time.sleep(1)
+    add_event("Runbook Executor", "All steps completed — service recovering", "exec", "success")
+    return {"status": "completed", "steps_executed": len(steps)}
+
+
+def run_postmortem():
+    add_event("Post-Mortem Writer", "Generating incident report...", "doc")
+
+    if QWEN_AVAILABLE:
+        add_event("Post-Mortem Writer", "Generating report with Qwen...", "doc")
+        # Build transcript from events
+        transcript = "\n".join(
+            f"[{e['time']}] {e['agent']}: {e['message']}" for e in events
+        )
+        user_input = (
+            f"Generate a comprehensive incident post-mortem from the following transcript. "
+            f"Include: Incident Summary, Timeline, Root Cause, Impact, Resolution, Action Items, Lessons Learned.\n\n"
+            f"Transcript:\n{transcript}"
+        )
+        raw = _call_qwen(
+            "You are a technical writer creating a comprehensive incident post-mortem. Be thorough, objective, and actionable.",
+            user_input,
+        )
+        if raw:
+            add_event("Post-Mortem Writer", "Report generated (Qwen API)", "doc", "success")
+            return {"postmortem": raw}
+
+    # Fallback: simulated
+    time.sleep(3)
+    add_event("Post-Mortem Writer", "Report generated — 7 sections, 12 action items", "doc", "success")
+    return {
+        "postmortem": (
+            "## Incident Summary\n"
+            "Database connection pool exhaustion caused cascading failure across service-api, "
+            "service-db, and load-balancer. ~15,000 active sessions affected for 8 minutes.\n\n"
+            "## Root Cause\n"
+            "A slow query (15.2s) on the users table caused connection backlog. Pool reached "
+            "max capacity (500). New requests queued, causing latency spike and 503 errors.\n\n"
+            "## Timeline\n"
+            "- 14:25:00 — Connection pool exhausted (active=500, max=500)\n"
+            "- 14:25:01 — Request timeouts begin on /api/users\n"
+            "- 14:25:03 — OOM kill candidate: heap 3.2GB\n"
+            "- 14:25:05 — Slow query detected (15.2s execution)\n"
+            "- 14:26:00 — Health check failures, instances marked unhealthy\n"
+            "- 14:26:30 — Backend removed from load balancer pool\n"
+            "- 14:27:00 — Cascading failures across 3/5 instances\n"
+            "- 14:29:00 — 45% of requests returning 503\n\n"
+            "## Action Items\n"
+            "1. Add query timeout (5s) to prevent connection backlog\n"
+            "2. Increase pool max from 500 to 1000\n"
+            "3. Add connection pool alert at 80% threshold\n"
+            "4. Implement circuit breaker for downstream DB calls\n"
+            "5. Add slow query monitoring and auto-kill for queries > 10s"
+        ),
+    }
+
+
+# ── Investigation Orchestrator ───────────────────────────────────────
+def run_investigation():
+    global investigation_active, investigation_result
+
+    investigation_active = True
+    investigation_result = {}
+    add_event("System", "Incident detected — deploying ResQ agents", "alert")
+
+    # Phase 1: parallel diagnosis
+    add_event("System", "Phase 1: Parallel diagnosis", "system")
+    log_result = run_log_analyzer()
+    metric_result = run_metric_monitor()
+
+    # Phase 2: coordination
+    add_event("System", "Phase 2: Coordinator arbitration", "system")
+    coord_result = run_coordinator(
+        log_result["hypotheses"],
+        metric_result["hypotheses"],
+    )
+
+    # Phase 3: remediation
+    add_event("System", "Phase 3: Runbook execution", "system")
+    exec_result = run_remediation(coord_result["action_plan"])
+
+    # Phase 4: post-mortem
+    add_event("System", "Phase 4: Post-mortem generation", "system")
+    pm_result = run_postmortem()
+
+    investigation_result = {
+        "status": "complete",
+        "log_analyzer": log_result,
+        "metric_monitor": metric_result,
+        "coordinator": coord_result,
+        "runbook_executor": exec_result,
+        "postmortem": pm_result,
+    }
+    investigation_active = False
+    add_event("System", "Incident resolved — all agents complete", "success")
+
+
+# ── Background Polling ───────────────────────────────────────────────
+def poll_target():
+    global service_status, current_metrics, last_investigation_time, incident_metrics_snapshot, incident_logs_snapshot
+    while True:
+        try:
+            r = req_lib.get(f"{TARGET_URL}/api/metrics", timeout=3)
+            if r.status_code == 200:
+                m = r.json()
+                current_metrics = m
+                service_status = "degraded" if m.get("degraded") else "ok"
+
+                with lock:
+                    metrics_history.append(m)
+                    if len(metrics_history) > 120:
+                        metrics_history.pop(0)
+
+                if check_anomaly(m) and not investigation_active:
+                    now = time.time()
+                    if now - last_investigation_time > INVESTIGATION_COOLDOWN:
+                        last_investigation_time = now
+                        # Capture snapshots at incident detection time
+                        try:
+                            mh = req_lib.get(f"{TARGET_URL}/api/metrics-history", timeout=5)
+                            incident_metrics_snapshot = mh.json().get("history", [])
+                        except Exception:
+                            incident_metrics_snapshot = []
+                        try:
+                            lg = req_lib.get(f"{TARGET_URL}/api/logs", timeout=5)
+                            incident_logs_snapshot = lg.json().get("logs", [])
+                        except Exception:
+                            incident_logs_snapshot = []
+                        threading.Thread(target=run_investigation, daemon=True).start()
+            else:
+                service_status = "unreachable"
+        except Exception:
+            service_status = "unreachable"
+        time.sleep(POLL_INTERVAL)
+
+
+# ── Routes ───────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/status")
+def status():
+    with lock:
+        return jsonify({
+            "service_status": service_status,
+            "current_metrics": current_metrics,
+            "investigation_active": investigation_active,
+            "investigation_result": investigation_result,
+            "events": list(events),
+            "metrics_history": list(metrics_history),
+        })
+
+
+@app.route("/api/stream")
+def stream():
+    def generate():
+        last_event_count = 0
+        while True:
+            with lock:
+                data = {
+                    "service_status": service_status,
+                    "current_metrics": current_metrics,
+                    "investigation_active": investigation_active,
+                    "investigation_result": investigation_result,
+                    "events": events,
+                    "metrics_history": metrics_history[-60:],
+                }
+            new_events = len(events) - last_event_count
+            if new_events > 0:
+                last_event_count = len(events)
+                yield f"data: {json.dumps(data)}\n\n"
+            else:
+                # Send metrics-only update every 2s even without new events
+                yield f"data: {json.dumps(data)}\n\n"
+            time.sleep(1.5)
+
+    return Response(generate(), mimetype="text/event-stream")
+
+
+@app.route("/api/reset", methods=["POST"])
+def reset():
+    global investigation_active, investigation_result, incident_id
+    with lock:
+        metrics_history.clear()
+        events.clear()
+        investigation_active = False
+        investigation_result = {}
+        incident_id += 1
+    add_event("System", "Dashboard reset — monitoring resumed", "system")
+    return jsonify({"status": "reset"})
+
+
+# ── Start ────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    add_event("System", "ResQ Dashboard started — monitoring target on :5000", "system")
+    threading.Thread(target=poll_target, daemon=True).start()
+    print()
+    print("=" * 50)
+    print("  ResQ Dashboard")
+    print("  http://localhost:5001")
+    print("=" * 50)
+    print()
+    app.run(port=5001, debug=False, threaded=True)

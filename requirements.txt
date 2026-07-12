@@ -5,6 +5,11 @@ openai>=1.0.0
 python-dotenv>=1.0.0
 pytest>=7.0.0
 pytest-asyncio>=0.23.0
+flask>=3.0.0
+requests>=2.31.0
+psutil>=5.9.0
+rich>=13.0.0
+textual>=0.40.0
 
 # Alibaba Cloud SDK (for deployment proof)
 # Install separately when ready to test with real services:
@@ -12,6 +17,3 @@ pytest-asyncio>=0.23.0
 
 # Alibaba Cloud SLS (Simple Log Service) - Official Python SDK
 aliyun-log-python-sdk>=0.9.0
-
-# Dashboard
-streamlit>=1.30.0
