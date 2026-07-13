@@ -29,7 +29,9 @@ from textual import on
 # Add project root for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-TARGET_URL = "http://localhost:5000"
+# Target service to monitor. Override to point at a remote host (e.g. an
+# Alibaba ECS instance running flaskapp): set RESQ_TARGET_URL=http://<ip>:8000
+TARGET_URL = os.environ.get("RESQ_TARGET_URL", "http://localhost:5000")
 
 # ── Agent Colors (consistent across all views) ───────────────────────
 AGENT_COLORS = {
