@@ -1,0 +1,59 @@
+{
+    "incident_id": "INC-2024-003",
+    "severity": "high",
+    "trigger": "Automated alert: error rate exceeded 20% and p99 latency exceeded 4s",
+    "timestamp": "2024-03-02T03:15:00Z",
+    "description": "Deliberately ambiguous incident: logs are dominated by memory/GC/OOM noise (a red herring), while the metrics show the true root cause. A single agent tends to anchor on the dramatic memory log lines and misdiagnose a memory leak; specialized agents that read metrics independently see that memory is bounded and stable, cache hit rate collapsed FIRST, and DB latency rose only afterward.",
+    "logs": "2024-03-02T03:09:40Z [INFO] cache-client: connection to cache-node-2 lost, entering fallback mode\n2024-03-02T03:10:05Z [WARN] service-api: heap usage climbing: 2.6GB / 4GB\n2024-03-02T03:10:20Z [WARN] service-api: GC pause 480ms (young gen), allocation rate elevated\n2024-03-02T03:10:35Z [WARN] service-api: high memory pressure detected, request buffers accumulating\n2024-03-02T03:10:50Z [ERROR] service-api: OOM candidate flagged by memory watchdog (heap 2.8GB)\n2024-03-02T03:11:00Z [WARN] service-api: GC pause 610ms (full GC), throughput degraded\n2024-03-02T03:11:15Z [ERROR] service-db: slow query: SELECT * FROM products WHERE category=? (execution_time: 2.9s)\n2024-03-02T03:11:30Z [WARN] service-api: heap usage 2.8GB / 4GB, GC frequency increasing\n2024-03-02T03:11:45Z [ERROR] service-api: request queue depth 640 (threshold 100), workers saturated\n2024-03-02T03:12:00Z [ERROR] service-db: connection wait time 1.8s, active connections 250/300\n2024-03-02T03:12:20Z [WARN] service-api: memory watchdog: sustained pressure, consider heap tuning\n2024-03-02T03:12:40Z [ERROR] service-api: 503 errors climbing: 24% of requests failing",
+    "metrics": {
+        "cache_hit_rate_pct": [
+            {"timestamp": "03:05:00", "value": 96.2},
+            {"timestamp": "03:09:00", "value": 94.8},
+            {"timestamp": "03:10:00", "value": 11.3},
+            {"timestamp": "03:11:00", "value": 4.6},
+            {"timestamp": "03:12:00", "value": 5.1}
+        ],
+        "db_query_latency_ms": [
+            {"timestamp": "03:05:00", "value": 41},
+            {"timestamp": "03:09:00", "value": 44},
+            {"timestamp": "03:10:00", "value": 880},
+            {"timestamp": "03:11:00", "value": 2400},
+            {"timestamp": "03:12:00", "value": 3100}
+        ],
+        "memory_usage_gb": [
+            {"timestamp": "03:05:00", "value": 2.0},
+            {"timestamp": "03:09:00", "value": 2.1},
+            {"timestamp": "03:10:00", "value": 2.6},
+            {"timestamp": "03:11:00", "value": 2.8},
+            {"timestamp": "03:12:00", "value": 2.8}
+        ],
+        "error_rate_pct": [
+            {"timestamp": "03:05:00", "value": 0.4},
+            {"timestamp": "03:09:00", "value": 0.6},
+            {"timestamp": "03:10:00", "value": 9.2},
+            {"timestamp": "03:11:00", "value": 22.4},
+            {"timestamp": "03:12:00", "value": 27.8}
+        ],
+        "request_latency_p99_ms": [
+            {"timestamp": "03:05:00", "value": 110},
+            {"timestamp": "03:09:00", "value": 130},
+            {"timestamp": "03:10:00", "value": 1800},
+            {"timestamp": "03:11:00", "value": 4200},
+            {"timestamp": "03:12:00", "value": 5000}
+        ],
+        "db_connection_pool": [
+            {"timestamp": "03:05:00", "value": 78},
+            {"timestamp": "03:09:00", "value": 90},
+            {"timestamp": "03:10:00", "value": 210},
+            {"timestamp": "03:11:00", "value": 244},
+            {"timestamp": "03:12:00", "value": 251}
+        ]
+    },
+    "notes": "Diagnostic tells: (1) memory rises modestly to 2.8GB and PLATEAUS well under the 4GB limit — not an unbounded leak; (2) db_connection_pool peaks at 251/300 — not exhausted; (3) cache_hit_rate collapses at 03:10 BEFORE db latency and error rate rise — cache failure is the leading indicator, DB overload and memory pressure are downstream symptoms.",
+    "affected_services": ["service-api", "service-db", "cache-node-2"],
+    "affected_users_estimate": "~8,000 active sessions",
+    "ground_truth": {
+        "root_cause": "Cache node failure causing a cache-miss storm that overwhelmed the database",
+        "keywords": ["cache"]
+    }
+}

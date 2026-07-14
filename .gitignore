@@ -36,6 +36,8 @@ Thumbs.db
 
 # Demo artifacts
 demo/results_*.json
+demo/results_sls_*.json
+demo/baseline_results_*.json
 demo/incident_report.html
 target/resq_demo.db
 

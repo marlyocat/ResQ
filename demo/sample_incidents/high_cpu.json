@@ -38,5 +38,9 @@
         ]
     },
     "affected_services": ["service-api", "service-db", "load-balancer"],
-    "affected_users_estimate": "~15,000 active sessions"
+    "affected_users_estimate": "~15,000 active sessions",
+    "ground_truth": {
+        "root_cause": "Database connection pool exhaustion",
+        "keywords": ["connection pool", "exhaust"]
+    }
 }

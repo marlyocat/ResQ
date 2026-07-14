@@ -61,6 +61,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
+# Shared negotiation logic (same prompt + convergence heuristic as the batch path)
+from core.negotiation import NEGOTIATION_SUFFIX, causes_agree
+
 try:
     from integrations.qwen_client import QwenClient
     import asyncio
@@ -91,6 +94,13 @@ state = {
     "root_cause": None,
     "action_plan": None,
     "postmortem": None,
+    "negotiation": {
+        "status": "idle",          # idle | running | done
+        "disagreement": None,
+        "log_before": "", "metric_before": "",
+        "log_after": "", "metric_after": "",
+        "resolved": None,          # agreement | revised
+    },
 }
 
 # ── Agent Prompts ────────────────────────────────────────────────────
@@ -434,6 +444,93 @@ Be specific and reference actual data points."""
     add_event("Post-Mortem Writer", "Analysis unavailable - Qwen API required")
 
 
+def _top_cause(findings):
+    """Highest-confidence hypothesis cause from a findings list."""
+    if not findings:
+        return ""
+    return (max(findings, key=lambda h: h.get("confidence", 0)).get("cause", "") or "")
+
+
+def _negotiate_agent(agent_prompt, own_hyps, peer_name, peer_hyps):
+    """Ask one agent to reconsider its hypotheses given a peer's. Returns revised or None."""
+    if not (QWEN_AVAILABLE and peer_hyps):
+        return None
+    user_input = (
+        f"YOUR CURRENT HYPOTHESES:\n{json.dumps(own_hyps, indent=2)}\n\n"
+        f"PEER ({peer_name}) HYPOTHESES:\n{json.dumps(peer_hyps, indent=2)}\n\n"
+        f"Re-examine all of the above together and return your revised hypotheses."
+    )
+    raw = _call_qwen(agent_prompt + NEGOTIATION_SUFFIX, user_input)
+    if not raw:
+        return None
+    try:
+        revised = _parse_json(raw)
+        if isinstance(revised, list) and revised:
+            return revised
+    except (json.JSONDecodeError, KeyError):
+        pass
+    return None
+
+
+def run_negotiation():
+    """Phase 1.5 — agents exchange hypotheses and reconcile disagreements.
+
+    This is the 'dialogue and negotiation' step: when the Log Analyzer and Metric
+    Monitor disagree, each re-examines the incident with the other's evidence.
+    """
+    log_agent = state["agents"]["log_analyzer"]
+    met_agent = state["agents"]["metric_monitor"]
+    neg = state["negotiation"]
+    neg["status"] = "running"
+
+    log_before = _top_cause(log_agent["findings"])
+    met_before = _top_cause(met_agent["findings"])
+    neg["log_before"], neg["metric_before"] = log_before, met_before
+
+    disagreement = bool(log_before and met_before and not causes_agree(log_before, met_before))
+    neg["disagreement"] = disagreement
+
+    if not disagreement:
+        neg["status"] = "done"
+        neg["resolved"] = "agreement"
+        add_event("System", "Agents agree on the root cause — no negotiation needed")
+        return
+
+    add_event("System", "Agents disagree — opening negotiation round")
+    add_event("Log Analyzer", f"Position: {log_before[:70]}")
+    add_event("Metric Monitor", f"Position: {met_before[:70]}")
+
+    add_event("Log Analyzer", "Reconsidering with Metric Monitor's evidence...")
+    add_event("Metric Monitor", "Reconsidering with Log Analyzer's evidence...")
+    revised_log = _negotiate_agent(LOG_ANALYZER_PROMPT, log_agent["findings"],
+                                   "metric_monitor", met_agent["findings"])
+    revised_met = _negotiate_agent(METRIC_MONITOR_PROMPT, met_agent["findings"],
+                                   "log_analyzer", log_agent["findings"])
+
+    if revised_log:
+        # Re-read source code for any revised hypotheses that cite a location.
+        for h in revised_log:
+            loc = h.get("code_location")
+            if loc and loc.get("file") and loc.get("line"):
+                h["source_code"] = _read_source_code(loc["file"], loc["line"])
+        log_agent["findings"] = revised_log
+    if revised_met:
+        met_agent["findings"] = revised_met
+
+    log_after = _top_cause(log_agent["findings"])
+    met_after = _top_cause(met_agent["findings"])
+    neg["log_after"], neg["metric_after"] = log_after, met_after
+
+    if log_after and log_after != log_before:
+        add_event("Log Analyzer", f"Revised position: {log_after[:70]}")
+    if met_after and met_after != met_before:
+        add_event("Metric Monitor", f"Revised position: {met_after[:70]}")
+
+    neg["resolved"] = "revised"
+    neg["status"] = "done"
+    add_event("System", "Negotiation complete — Coordinator will arbitrate revised findings")
+
+
 def run_investigation(logs_snapshot, metrics_snapshot):
     state["status"] = "investigating"
     add_event("System", "Incident detected — deploying ResQ agent swarm")
@@ -445,6 +542,9 @@ def run_investigation(logs_snapshot, metrics_snapshot):
     metric_thread.start()
     log_thread.join()
     metric_thread.join()
+
+    add_event("System", "Phase 1.5: Inter-agent negotiation")
+    run_negotiation()
 
     add_event("System", "Phase 2: Coordinator arbitration")
     run_coordinator(
@@ -619,6 +719,46 @@ class AgentsWidget(Static):
         self.update("\n".join(lines))
 
 
+class NegotiationWidget(Static):
+    """Displays the inter-agent negotiation (conflict detection + resolution)."""
+    can_focus = True
+
+    def on_mount(self):
+        self.border_title = "Agent Negotiation"
+        self.set_interval(0.5, self.refresh_neg)
+
+    def refresh_neg(self):
+        neg = state["negotiation"]
+        if neg["status"] == "idle":
+            self.update("[dim]Awaiting parallel diagnosis...[/dim]")
+            return
+
+        if neg.get("disagreement") is False:
+            self.update("[green]✓ Log Analyzer and Metric Monitor agree — "
+                        "no conflict to resolve.[/green]")
+            return
+
+        lines = ["[bold red]⚔ Conflict detected between specialists[/bold red]", ""]
+        lines.append("[dim]Initial positions:[/dim]")
+        lines.append(f"  [blue]📝 Log Analyzer:[/blue]    {neg.get('log_before', '')[:66]}")
+        lines.append(f"  [magenta]📊 Metric Monitor:[/magenta] {neg.get('metric_before', '')[:66]}")
+
+        if neg["status"] == "running":
+            lines.append("")
+            lines.append("[yellow]↔ Agents exchanging evidence and reconsidering...[/yellow]")
+        elif neg["status"] == "done":
+            lines.append("")
+            lines.append("[dim]After negotiation:[/dim]")
+            la = neg.get("log_after") or "(unchanged)"
+            ma = neg.get("metric_after") or "(unchanged)"
+            lines.append(f"  [blue]📝 Log Analyzer:[/blue]    {la[:66]}")
+            lines.append(f"  [magenta]📊 Metric Monitor:[/magenta] {ma[:66]}")
+            lines.append("")
+            lines.append("[green]✓ Conflict resolved — revised findings sent to Coordinator[/green]")
+
+        self.update("\n".join(lines))
+
+
 class TimelineWidget(RichLog):
     """Displays event timeline using RichLog for proper scrolling."""
 
@@ -737,6 +877,9 @@ class ResQApp(App):
     #agents-panel {
         border: solid $warning;
     }
+    #negotiation-panel {
+        border: solid $error;
+    }
     #timeline-panel {
         border: solid $accent;
         scrollbar-size: 0 0;
@@ -770,6 +913,7 @@ class ResQApp(App):
             yield MetricsWidget(id="metrics-panel", classes="widget")
             yield RootCauseWidget(id="rootcause-panel", classes="widget")
             yield AgentsWidget(id="agents-panel", classes="widget")
+            yield NegotiationWidget(id="negotiation-panel", classes="widget")
             yield TimelineWidget(id="timeline-panel", classes="widget")
         yield Footer()
 
