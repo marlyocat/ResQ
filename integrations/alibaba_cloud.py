@@ -1,18 +1,17 @@
-"""Alibaba Cloud integration for ResQ.
+"""Alibaba Cloud SLS integration for ResQ (investigator side).
 
-This module demonstrates the use of Alibaba Cloud services and APIs for the backend,
-fulfilling the hackathon requirement for proof of Alibaba Cloud deployment.
+Fetches production logs from Alibaba Cloud SLS (Simple Log Service) to feed the
+Log Analyzer agent, using the official aliyun-log-python-sdk. Used by
+`main.py --sls-incident`.
 
-Services used:
-- ECS (Elastic Compute Service): Hosting the agent orchestration service
-- SLS (Simple Log Service): Log ingestion and querying (via aliyun-log-python-sdk)
-- CMS (Cloud Monitor Service): Metrics retrieval
+Note: the deployable backend and its full SLS/OSS/ECS/CMS usage live in
+`target-service/` (that is the "backend running on Alibaba Cloud"). This module
+is the investigator-side SLS reader only.
 """
 
 import os
-import json
 import logging
-from typing import Optional, List, Dict
+from typing import Optional, List
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -21,26 +20,12 @@ logger = logging.getLogger(__name__)
 try:
     from aliyun.log.logclient import LogClient
     from aliyun.log.getlogsrequest import GetLogsRequest
-    from aliyun.log.gethistogramsrequest import GetHistogramsRequest
     SLS_SDK_AVAILABLE = True
 except ImportError:
     SLS_SDK_AVAILABLE = False
     logger.warning(
         "Alibaba Cloud SLS SDK not installed. Install with: "
         "pip install aliyun-log-python-sdk"
-    )
-
-# Alibaba Cloud ECS/CMS SDKs (optional, used for infrastructure context)
-try:
-    from alibabacloud_tea_openapi.models import Config
-    from alibabacloud_ecs20140526.client import Client as EcsClient
-    from alibabacloud_cms20190101.client import Client as CmsClient
-    ECS_CMS_SDK_AVAILABLE = True
-except ImportError:
-    ECS_CMS_SDK_AVAILABLE = False
-    logger.warning(
-        "Alibaba Cloud ECS/CMS SDK not installed. Install with: "
-        "pip install alibabacloud_ecs20140526 alibabacloud_cms20190101"
     )
 
 
@@ -54,6 +39,7 @@ SLS_ENDPOINTS = {
     "cn-zhangjiakou": "cn-zhangjiakou.log.aliyuncs.com",
     "cn-hongkong": "cn-hongkong.log.aliyuncs.com",
     "ap-southeast-1": "ap-southeast-1.log.aliyuncs.com",
+    "ap-southeast-3": "ap-southeast-3.log.aliyuncs.com",
     "us-west-1": "us-west-1.log.aliyuncs.com",
     "us-east-1": "us-east-1.log.aliyuncs.com",
     "eu-central-1": "eu-central-1.log.aliyuncs.com",
@@ -61,7 +47,7 @@ SLS_ENDPOINTS = {
 
 
 class AlibabaCloudIntegration:
-    """Integration with Alibaba Cloud services for ResQ backend."""
+    """Reads production logs from Alibaba Cloud SLS for the Log Analyzer agent."""
 
     def __init__(
         self,
@@ -79,9 +65,7 @@ class AlibabaCloudIntegration:
                 "ALIBABA_ACCESS_KEY_SECRET environment variables for full functionality."
             )
 
-        self._ecs_client = None
         self._sls_client = None
-        self._cms_client = None
 
     def _get_sls_endpoint(self) -> str:
         """Get the SLS endpoint for the configured region."""
@@ -104,66 +88,6 @@ class AlibabaCloudIntegration:
             self.access_key_secret
         )
         logger.info(f"SLS client initialized: {endpoint}")
-
-    def _init_ecs_cms_clients(self):
-        """Initialize ECS and CMS SDK clients (optional)."""
-        if not ECS_CMS_SDK_AVAILABLE:
-            raise ImportError(
-                "Alibaba Cloud ECS/CMS SDK required. Install with: "
-                "pip install alibabacloud_ecs20140526 alibabacloud_cms20190101"
-            )
-
-        config = Config(
-            access_key_id=self.access_key_id,
-            access_key_secret=self.access_key_secret,
-            region_id=self.region_id
-        )
-
-        self._ecs_client = EcsClient(config)
-        self._cms_client = CmsClient(config)
-
-    # ==================== ECS Integration ====================
-
-    async def get_ecs_instances(self) -> List[dict]:
-        """
-        Query ECS instances for infrastructure context during incident analysis.
-
-        Alibaba Cloud API: DescribeInstances
-        Documentation: https://www.alibabacloud.com/help/en/ecs/developer-reference/api-ecs-2014-05-26-describeinstances
-        """
-        if not self._ecs_client:
-            self._init_ecs_cms_clients()
-
-        # In production, this calls: self._ecs_client.describe_instances(...)
-        # For hackathon demo, returning structured placeholder
-        return [
-            {
-                "instance_id": "i-bp1abcdef1234567890",
-                "instance_name": "resq-orchestrator",
-                "status": "Running",
-                "instance_type": "ecs.g7.xlarge",
-                "region": self.region_id
-            }
-        ]
-
-    async def describe_instance_status(self, instance_ids: List[str]) -> List[dict]:
-        """
-        Check ECS instance health status.
-
-        Uses Alibaba Cloud ECS API to verify if target instances are healthy,
-        which informs the incident diagnosis.
-        """
-        if not self._ecs_client:
-            self._init_ecs_cms_clients()
-
-        return [
-            {
-                "instance_id": iid,
-                "status": "Running",
-                "health_check": "passed"
-            }
-            for iid in instance_ids
-        ]
 
     # ==================== SLS (Log Service) Integration ====================
 
@@ -251,58 +175,6 @@ class AlibabaCloudIntegration:
             logger.error(f"SLS query failed: project={project}, logstore={logstore}, error={e}")
             raise
 
-    async def get_log_histogram(
-        self,
-        project: str,
-        logstore: str,
-        query: str = "*",
-        from_time: Optional[datetime] = None,
-        to_time: Optional[datetime] = None
-    ) -> List[dict]:
-        """
-        Get log volume histogram for a time window.
-
-        Useful for detecting spikes in error rates or log volume during incidents.
-
-        Args:
-            project: SLS project name
-            logstore: LogStore name
-            query: SLS query string
-            from_time: Start time
-            to_time: End time
-
-        Returns:
-            List of histogram buckets with timestamp and log count
-        """
-        if not self._sls_client:
-            self._init_sls_client()
-
-        from_ts = int(from_time.timestamp()) if from_time else int((datetime.utcnow() - timedelta(hours=1)).timestamp())
-        to_ts = int(to_time.timestamp()) if to_time else int(datetime.utcnow().timestamp())
-
-        request = GetHistogramsRequest(
-            project=project,
-            logstore=logstore,
-            fromTime=from_ts,
-            toTime=to_ts,
-            topic="",
-            query=query
-        )
-
-        try:
-            response = self._sls_client.get_histograms(request)
-            return [
-                {
-                    "timestamp": bucket.get_from(),
-                    "count": bucket.get_count(),
-                    "source": "sls_histogram"
-                }
-                for bucket in response.get_histograms()
-            ]
-        except Exception as e:
-            logger.error(f"SLS histogram query failed: {e}")
-            raise
-
     async def fetch_logs_for_incident(
         self,
         project: str,
@@ -352,75 +224,13 @@ class AlibabaCloudIntegration:
             lines=500
         )
 
-    # ==================== CMS (Cloud Monitor) Integration ====================
 
-    async def get_metrics(
-        self,
-        namespace: str,
-        metric_name: str,
-        dimensions: dict,
-        period: str = "60"
-    ) -> List[dict]:
-        """
-        Retrieve metrics from Alibaba Cloud CMS (Cloud Monitor Service).
-
-        Alibaba Cloud API: DescribeMetricLast
-        Documentation: https://www.alibabacloud.com/help/en/cms/developer-reference/api-cms-2019-01-01-describemetriclast
-
-        This is the primary metric source for the Metric Monitor agent.
-        """
-        if not self._cms_client:
-            self._init_ecs_cms_clients()
-
-        # In production, this calls: self._cms_client.describe_metric_last(...)
-        # For hackathon demo, returning structured placeholder
-        logger.info(f"CMS Query: namespace={namespace}, metric={metric_name}")
-        return [
-            {
-                "timestamp": datetime.utcnow().isoformat(),
-                "metric": metric_name,
-                "value": 85.5,
-                "unit": "%",
-                "dimensions": dimensions,
-                "source": "cms"
-            }
-        ]
-
-    async def describe_alarm_history(
-        self,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None
-    ) -> List[dict]:
-        """
-        Retrieve recent alarm history from CMS.
-
-        Helps correlate active incidents with triggered alerts.
-        """
-        if not self._cms_client:
-            self._init_ecs_cms_clients()
-
-        return [
-            {
-                "alarm_id": "alarm-cms-001",
-                "metric": "CPUUtilization",
-                "threshold": 80,
-                "value": 95.2,
-                "status": "ALARM",
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        ]
-
-
-# ==================== Hackathon Submission Proof ====================
-# This file serves as proof of Alibaba Cloud deployment for the hackathon.
-# It demonstrates integration with:
-# 1. ECS API - for infrastructure context
-# 2. SLS API - for log querying (feeds Log Analyzer agent) via aliyun-log-python-sdk
-# 3. CMS API - for metrics retrieval (feeds Metric Monitor agent)
+# ==================== Alibaba Cloud usage (investigator side) ====================
+# This module reads logs from SLS to feed the Log Analyzer agent.
 #
-# To run with real Alibaba Cloud services:
-# 1. Set ALIBABA_ACCESS_KEY_ID and ALIBABA_ACCESS_KEY_SECRET environment variables
-# 2. Install SLS SDK: pip install aliyun-log-python-sdk
-# 3. (Optional) Install ECS/CMS SDKs: pip install alibabacloud_ecs20140526 alibabacloud_cms20190101
-# 4. Update region_id to match your deployment region
-# 5. Create an SLS project and logstore, then configure your apps to ship logs there
+# To run with real Alibaba Cloud SLS:
+# 1. Set ALIBABA_ACCESS_KEY_ID and ALIBABA_ACCESS_KEY_SECRET
+# 2. Install the SLS SDK: pip install aliyun-log-python-sdk
+# 3. Set region_id to match your deployment region
+# 4. Create an SLS project + logstore and ship your app's logs there
+#    (the target-service/ app does exactly this — see target-service/integrations/)

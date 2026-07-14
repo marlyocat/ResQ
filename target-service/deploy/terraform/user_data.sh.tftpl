@@ -1,0 +1,80 @@
+#!/bin/bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y python3 python3-pip python3-venv unzip curl
+
+mkdir -p /opt/flaskapp && cd /opt/flaskapp
+
+# The app package is uploaded to OSS by Terraform; retry until it's readable.
+for i in $(seq 1 30); do
+  curl -fsSL "${app_zip_url}" -o app.zip && break
+  echo "waiting for app package in OSS... ($i)"
+  sleep 5
+done
+unzip -o app.zip
+
+python3 -m venv venv
+./venv/bin/pip install --upgrade pip
+./venv/bin/pip install -r requirements.txt
+
+# Runtime configuration (single-quoted heredoc: values are written literally).
+cat > /opt/flaskapp/.env <<'ENVEOF'
+ALIBABA_ACCESS_KEY_ID=${access_key}
+ALIBABA_ACCESS_KEY_SECRET=${secret_key}
+ALIBABA_REGION_ID=${region}
+SLS_ENDPOINT=
+SLS_PROJECT=${sls_project}
+SLS_LOGSTORE=${sls_logstore}
+SLS_TOPIC=flaskapp
+SLS_SOURCE=ecs
+OSS_ENDPOINT=https://oss-${region}.aliyuncs.com
+OSS_BUCKET_NAME=${oss_bucket_name}
+CMS_NAMESPACE=acs_ecs_dashboard
+PORT=${app_port}
+SCENARIO=${scenario}
+FAILURE_DELAY=30
+ENVEOF
+
+cat > /etc/systemd/system/flaskapp.service <<'SVCEOF'
+[Unit]
+Description=flaskapp instrumented target service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/flaskapp
+ExecStart=/opt/flaskapp/venv/bin/python /opt/flaskapp/app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+# Lightweight, always-on load generator so the app's metrics are live and the
+# incident (real 503s + latency) is visible to ResQ without external traffic.
+cat > /etc/systemd/system/flaskapp-load.service <<'LOADEOF'
+[Unit]
+Description=flaskapp load generator
+After=flaskapp.service
+Requires=flaskapp.service
+
+[Service]
+WorkingDirectory=/opt/flaskapp
+Environment=LOAD_TARGET=http://localhost:${app_port}
+Environment=LOAD_WORKERS=2
+Environment=LOAD_DELAY=0.5
+ExecStart=/opt/flaskapp/venv/bin/python /opt/flaskapp/demo/load_sim.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+LOADEOF
+
+systemctl daemon-reload
+systemctl enable flaskapp flaskapp-load
+systemctl start flaskapp
+sleep 5
+systemctl start flaskapp-load

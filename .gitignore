@@ -43,3 +43,11 @@ target/resq_demo.db
 
 # Qwen
 .qwen/
+
+# Terraform (target-service deploy) — never commit state or real tfvars
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/terraform.tfvars
+**/*.auto.tfvars
+**/.terraform.lock.hcl

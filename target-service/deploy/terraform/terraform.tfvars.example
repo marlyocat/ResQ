@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
+# These credentials are used by Terraform to CREATE resources — they need
+# provisioning permissions (SLS/OSS/ECS/RAM), not just the app's runtime scope.
+
+access_key = "<YOUR_PROVISIONING_ACCESS_KEY_ID>"
+secret_key = "<YOUR_PROVISIONING_ACCESS_KEY_SECRET>"
+
+# Malaysia (Kuala Lumpur)
+region = "ap-southeast-3"
+
+# Names must be globally unique — change these if apply reports a conflict.
+sls_project     = "flaskapp-logs"
+sls_logstore    = "app-logs"
+oss_bucket_name = "flaskapp-incident-reports"
+
+# ── Optional add-ons (default off) ─────────────────────────────────────────
+# Provision a VM to run the app on (adds VPC + ECS instance):
+create_ecs = false
+
+# Create a least-privilege RAM user + AccessKey for the app to use at runtime:
+create_ram_user = false
+
+# false = trigger incidents manually via POST /api/scenario (recommended for demos)
+# true  = instance auto-injects an incident ~30s after boot
+auto_incident = false

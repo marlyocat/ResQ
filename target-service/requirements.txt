@@ -1,0 +1,22 @@
+# Flask target service instrumented for Alibaba Cloud
+flask>=3.0.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+psutil>=5.9.0
+
+# ── Alibaba Cloud SDKs (real integrations) ──────────────────────────────────
+# SLS (Simple Log Service) — ship + query logs
+aliyun-log-python-sdk>=0.9.0
+
+# OSS (Object Storage Service) — store reports/artifacts
+oss2>=2.18.0
+
+# ECS (Elastic Compute Service) — instance/infra context
+alibabacloud_ecs20140526>=3.0.0
+
+# CMS (Cloud Monitor Service) — metrics + alarm history
+alibabacloud_cms20190101>=3.0.0
+
+# Shared Tea OpenAPI runtime (used by ECS + CMS SDKs)
+alibabacloud_tea_openapi>=0.3.0
+alibabacloud_tea_util>=0.3.0

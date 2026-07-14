@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="900" viewBox="0 0 1040 900" font-family="'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#94a3b8"/>
+    </marker>
+    <marker id="qarrow" markerWidth="10" markerHeight="8" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/>
+    </marker>
+    <marker id="aarrow" markerWidth="10" markerHeight="8" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#f97316"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1040" height="900" fill="#0f172a"/>
+
+  <!-- Title -->
+  <text x="520" y="40" text-anchor="middle" fill="#f8fafc" font-size="26" font-weight="700">ResQ — Multi-Agent Incident Response</text>
+  <text x="520" y="66" text-anchor="middle" fill="#94a3b8" font-size="14">Track 3 · Agent Society — task division, dialogue &amp; negotiation, measured gain</text>
+
+  <!-- ================= Alibaba Cloud rail (left) ================= -->
+  <rect x="24" y="96" width="196" height="664" rx="12" fill="#1c1917" stroke="#f97316" stroke-width="1.5"/>
+  <text x="122" y="124" text-anchor="middle" fill="#fdba74" font-size="15" font-weight="700">Alibaba Cloud</text>
+  <text x="122" y="143" text-anchor="middle" fill="#a8a29e" font-size="11">backend runs on ECS</text>
+
+  <g font-size="12.5">
+    <rect x="44" y="162" width="156" height="52" rx="8" fill="#292524" stroke="#f97316" stroke-opacity="0.5"/>
+    <text x="122" y="184" text-anchor="middle" fill="#fed7aa" font-weight="600">SLS</text>
+    <text x="122" y="201" text-anchor="middle" fill="#a8a29e" font-size="10.5">PutLogs / GetLogs</text>
+
+    <rect x="44" y="228" width="156" height="52" rx="8" fill="#292524" stroke="#f97316" stroke-opacity="0.5"/>
+    <text x="122" y="250" text-anchor="middle" fill="#fed7aa" font-weight="600">OSS</text>
+    <text x="122" y="267" text-anchor="middle" fill="#a8a29e" font-size="10.5">report storage</text>
+
+    <rect x="44" y="294" width="156" height="52" rx="8" fill="#292524" stroke="#f97316" stroke-opacity="0.5"/>
+    <text x="122" y="316" text-anchor="middle" fill="#fed7aa" font-weight="600">ECS</text>
+    <text x="122" y="333" text-anchor="middle" fill="#a8a29e" font-size="10.5">DescribeInstances</text>
+
+    <rect x="44" y="360" width="156" height="52" rx="8" fill="#292524" stroke="#f97316" stroke-opacity="0.5"/>
+    <text x="122" y="382" text-anchor="middle" fill="#fed7aa" font-weight="600">CMS</text>
+    <text x="122" y="399" text-anchor="middle" fill="#a8a29e" font-size="10.5">DescribeMetricLast</text>
+  </g>
+  <text x="122" y="440" text-anchor="middle" fill="#78716c" font-size="10">target-service/integrations/</text>
+
+  <!-- ================= Qwen Cloud rail (right) ================= -->
+  <rect x="820" y="96" width="196" height="664" rx="12" fill="#1e1b4b" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="918" y="124" text-anchor="middle" fill="#c4b5fd" font-size="15" font-weight="700">Qwen Cloud</text>
+  <text x="918" y="143" text-anchor="middle" fill="#a5b4fc" font-size="11">qwen-plus (DashScope)</text>
+  <text x="918" y="420" text-anchor="middle" fill="#a5b4fc" font-size="12">reasoning for</text>
+  <text x="918" y="438" text-anchor="middle" fill="#a5b4fc" font-size="12">every agent</text>
+  <text x="918" y="456" text-anchor="middle" fill="#a5b4fc" font-size="12">&amp; negotiation</text>
+
+  <!-- ================= Center pipeline ================= -->
+  <!-- A: Target service -->
+  <rect x="350" y="96" width="340" height="54" rx="10" fill="#1e293b" stroke="#f97316" stroke-width="1.5"/>
+  <text x="520" y="118" text-anchor="middle" fill="#f1f5f9" font-size="15" font-weight="600">Target Service  (on Alibaba ECS)</text>
+  <text x="520" y="137" text-anchor="middle" fill="#94a3b8" font-size="11">/api/logs · /api/metrics — ships logs to SLS in real time</text>
+
+  <!-- B: Detection -->
+  <rect x="350" y="176" width="340" height="48" rx="10" fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
+  <text x="520" y="199" text-anchor="middle" fill="#e2e8f0" font-size="14" font-weight="600">Incident Detection</text>
+  <text x="520" y="216" text-anchor="middle" fill="#94a3b8" font-size="10.5">error-rate / p99-latency thresholds · alert webhooks</text>
+
+  <!-- Phase 1 -->
+  <text x="520" y="252" text-anchor="middle" fill="#64748b" font-size="11" font-weight="700" letter-spacing="1">PHASE 1 · PARALLEL DIAGNOSIS  (task division)</text>
+  <rect x="350" y="262" width="162" height="56" rx="10" fill="#172554" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="431" y="286" text-anchor="middle" fill="#bfdbfe" font-size="13.5" font-weight="600">📝 Log Analyzer</text>
+  <text x="431" y="304" text-anchor="middle" fill="#93c5fd" font-size="10.5">logs + source code</text>
+  <rect x="528" y="262" width="162" height="56" rx="10" fill="#3b0764" stroke="#d946ef" stroke-width="1.5"/>
+  <text x="609" y="286" text-anchor="middle" fill="#f5d0fe" font-size="13.5" font-weight="600">📊 Metric Monitor</text>
+  <text x="609" y="304" text-anchor="middle" fill="#f0abfc" font-size="10.5">metric anomalies</text>
+
+  <!-- Phase 1.5 negotiation -->
+  <text x="520" y="352" text-anchor="middle" fill="#64748b" font-size="11" font-weight="700" letter-spacing="1">PHASE 1.5 · NEGOTIATION  (dialogue &amp; conflict resolution)</text>
+  <rect x="350" y="362" width="340" height="64" rx="10" fill="#1e293b" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="520" y="385" text-anchor="middle" fill="#fecaca" font-size="14" font-weight="600">⚔ Inter-Agent Negotiation  ·  MessageBus</text>
+  <text x="520" y="403" text-anchor="middle" fill="#94a3b8" font-size="10.5">agents exchange hypotheses + evidence on disagreement,</text>
+  <text x="520" y="418" text-anchor="middle" fill="#94a3b8" font-size="10.5">separate root cause from symptom, then revise</text>
+
+  <!-- Phase 2 coordinator -->
+  <text x="520" y="458" text-anchor="middle" fill="#64748b" font-size="11" font-weight="700" letter-spacing="1">PHASE 2 · ARBITRATION</text>
+  <rect x="350" y="468" width="340" height="56" rx="10" fill="#292014" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="520" y="491" text-anchor="middle" fill="#fde68a" font-size="14" font-weight="600">🧠 Coordinator + ConsensusEngine</text>
+  <text x="520" y="509" text-anchor="middle" fill="#94a3b8" font-size="10.5">confidence + evidence + cross-agent confirmation → root cause</text>
+
+  <!-- Phase 3 runbook -->
+  <rect x="350" y="548" width="340" height="46" rx="10" fill="#052e1a" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="520" y="570" text-anchor="middle" fill="#bbf7d0" font-size="13.5" font-weight="600">🔧 Runbook Executor</text>
+  <text x="520" y="586" text-anchor="middle" fill="#86efac" font-size="10.5">Phase 3 · remediation plan</text>
+
+  <!-- Phase 4 postmortem -->
+  <rect x="350" y="616" width="340" height="46" rx="10" fill="#083344" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="520" y="638" text-anchor="middle" fill="#a5f3fc" font-size="13.5" font-weight="600">📋 Post-Mortem Writer</text>
+  <text x="520" y="654" text-anchor="middle" fill="#67e8f9" font-size="10.5">Phase 4 · incident report</text>
+
+  <!-- Outputs -->
+  <rect x="350" y="690" width="162" height="56" rx="10" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>
+  <text x="431" y="713" text-anchor="middle" fill="#e2e8f0" font-size="13" font-weight="600">Terminal UI</text>
+  <text x="431" y="731" text-anchor="middle" fill="#94a3b8" font-size="10.5">live investigation</text>
+  <rect x="528" y="690" width="162" height="56" rx="10" fill="#1e293b" stroke="#f97316" stroke-width="1.5"/>
+  <text x="609" y="713" text-anchor="middle" fill="#fed7aa" font-size="13" font-weight="600">Report → OSS</text>
+  <text x="609" y="731" text-anchor="middle" fill="#94a3b8" font-size="10.5">stored on Alibaba</text>
+
+  <!-- ================= Flow arrows (center) ================= -->
+  <g stroke="#94a3b8" stroke-width="2" fill="none" marker-end="url(#arrow)">
+    <line x1="520" y1="150" x2="520" y2="174"/>
+    <line x1="520" y1="224" x2="520" y2="260"/>           <!-- B -> phase1 -->
+    <line x1="431" y1="318" x2="431" y2="360"/>           <!-- log -> negotiation -->
+    <line x1="609" y1="318" x2="609" y2="360"/>           <!-- metric -> negotiation -->
+    <line x1="520" y1="426" x2="520" y2="466"/>           <!-- negotiation -> coordinator -->
+    <line x1="520" y1="524" x2="520" y2="546"/>           <!-- coordinator -> runbook -->
+    <line x1="520" y1="594" x2="520" y2="614"/>           <!-- runbook -> postmortem -->
+    <line x1="520" y1="662" x2="520" y2="688"/>           <!-- postmortem -> outputs -->
+  </g>
+
+  <!-- Alibaba -> target (logs+metrics) and outputs -> OSS -->
+  <g stroke="#f97316" stroke-width="1.8" fill="none" stroke-dasharray="5,4">
+    <line x1="220" y1="123" x2="348" y2="123" marker-end="url(#aarrow)"/>
+    <line x1="528" y1="718" x2="222" y2="718" marker-end="url(#aarrow)"/>
+  </g>
+  <text x="284" y="114" text-anchor="middle" fill="#fb923c" font-size="9.5">logs/metrics</text>
+
+  <!-- Qwen -> agents (dashed, reasoning) -->
+  <g stroke="#8b5cf6" stroke-width="1.6" fill="none" stroke-dasharray="5,4" marker-end="url(#qarrow)">
+    <line x1="818" y1="290" x2="692" y2="290"/>   <!-- to metric monitor -->
+    <line x1="818" y1="394" x2="692" y2="394"/>   <!-- to negotiation -->
+    <line x1="818" y1="496" x2="692" y2="496"/>   <!-- to coordinator -->
+    <line x1="818" y1="571" x2="692" y2="571"/>   <!-- to runbook -->
+    <line x1="818" y1="639" x2="692" y2="639"/>   <!-- to postmortem -->
+  </g>
+
+  <!-- Measured-gain callout -->
+  <rect x="24" y="792" width="992" height="86" rx="10" fill="#022c22" stroke="#10b981" stroke-width="1.5"/>
+  <text x="44" y="818" fill="#6ee7b7" font-size="13" font-weight="700">Measured efficiency gain (avg diagnostic accuracy over 2 incidents)</text>
+  <text x="44" y="842" fill="#d1fae5" font-size="12.5">Single-agent 0.75    ·    Multi-agent (naive arbitration) 0.50    ·    Multi-agent (negotiated) 1.00</text>
+  <text x="44" y="863" fill="#94a3b8" font-size="11">On an ambiguous incident, naive arbitration misdiagnoses (0.0); negotiation flips it to correct (1.0).  See docs/baseline_comparison.md</text>
+</svg>

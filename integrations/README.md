@@ -1,168 +1,65 @@
-# ResQ Integrations
+# ResQ Integrations (investigator side)
 
-Real integration layer for connecting ResQ to production applications.
+The investigator-side integration layer. Two modules:
 
-## Overview
+| Module | Purpose |
+|--------|---------|
+| [`qwen_client.py`](qwen_client.py) | Async client for **Qwen Cloud** (qwen-plus via the DashScope OpenAI-compatible API) — powers every agent's reasoning. |
+| [`alibaba_cloud.py`](alibaba_cloud.py) | Reads production logs from **Alibaba Cloud SLS** (`GetLogs`) to feed the Log Analyzer when running `main.py --sls-incident`. |
 
-ResQ can now connect to real infrastructure:
+> The deployable backend and its full **SLS / OSS / ECS / CMS** usage live in
+> [`../target-service/`](../target-service/) — that is the "backend running on
+> Alibaba Cloud." This layer is the investigator side (Qwen + SLS log reads).
 
-```
-Your App → SLS/Prometheus → ResQ Agents
-       → GitHub/Local Repo → Source Indexer
-       → Redis/Kafka/Postgres → Infrastructure Probes
-       → Grafana/PagerDuty → Alert Webhook
-```
+## Configuration
 
-## Setup
-
-### 1. Environment Variables
-
-Create `.env` file:
+Set these in `.env` (see [`../.env.example`](../.env.example)):
 
 ```bash
-# Qwen API (required)
+# Qwen Cloud (required — all agent reasoning)
 QWEN_API_KEY=your_key_here
 QWEN_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 QWEN_MODEL=qwen-plus
 
-# SLS Logs (Alibaba Cloud)
+# Alibaba Cloud SLS (optional — only for `main.py --sls-incident`, live log reads)
 ALIBABA_ACCESS_KEY_ID=your_key
 ALIBABA_ACCESS_KEY_SECRET=your_secret
-ALIBABA_REGION_ID=cn-hangzhou
-SLS_PROJECT=your-project
-SLS_LOGSTORE=your-logstore
-
-# Prometheus Metrics
-PROMETHEUS_URL=http://localhost:9090
-PROMETHEUS_USERNAME=  # optional
-PROMETHEUS_PASSWORD=  # optional
-
-# Source Code (choose one)
-SOURCE_LOCAL_PATH=/path/to/your/repo
-# OR
-SOURCE_GITHUB_URL=https://github.com/yourorg/yourapp
-GITHUB_TOKEN=your_token  # for private repos
-
-# Infrastructure (optional)
-REDIS_URL=redis://localhost:6379
-DATABASE_URL=postgresql://user:pass@localhost:5432/db
-KAFKA_BOOTSTRAP_SERVERS=localhost:9092
-RABBITMQ_URL=http://localhost:15672
-
-# Webhook
-RESQ_WEBHOOK_PORT=5001
-```
-
-### 2. Install Dependencies
-
-```bash
-pip install -r requirements.txt
+ALIBABA_REGION_ID=ap-southeast-3
 ```
 
 ## Usage
 
-### Basic Integration
+### Qwen client (used by every agent)
 
 ```python
-from integrations.config import ResQConfig
-from integrations.prometheus_client import PrometheusClient
-from integrations.source_indexer import SourceIndexer
-from integrations.infrastructure_probes import InfrastructureProbes
+from integrations.qwen_client import QwenClient
 
-# Load config
-config = ResQConfig()
-
-# Connect to Prometheus
-prometheus = PrometheusClient(**config.prometheus_config)
-metrics = prometheus.get_error_rate("my-app")
-
-# Index source code
-indexer = SourceIndexer(
-    local_path=config.source_local_path,
-    github_url=config.source_github_url,
-    github_token=config.source_github_token,
+qwen = QwenClient()                       # reads QWEN_API_KEY from env
+result = await qwen.analyze_with_context(
+    system_prompt="You are a senior SRE...",
+    user_input="Analyze these logs...",
 )
-indexer.index_local_repo()  # or indexer.index_github_repo()
-
-# Probe infrastructure
-probes = InfrastructureProbes()
-redis_health = probes.probe_redis(config.redis_url)
-db_health = probes.probe_postgresql(config.database_url)
+print(result["raw_response"])
 ```
 
-### Alert Webhook
+### SLS log fetch (live incident mode)
 
 ```python
-from integrations.alert_webhook import AlertManager
+from integrations.alibaba_cloud import AlibabaCloudIntegration
+from datetime import datetime
 
-manager = AlertManager()
-manager.setup_webhook(port=5001)
-
-def on_incident(alert):
-    print(f"Incident: {alert['title']}")
-    # Trigger ResQ investigation
-
-manager.on_investigation(on_incident)
+sls = AlibabaCloudIntegration(region_id="ap-southeast-3")
+logs = await sls.fetch_logs_for_incident(
+    project="my-project",
+    logstore="app-logs",
+    incident_time=datetime.utcnow(),
+    levels=["ERROR", "CRITICAL"],
+    lookback_minutes=30,
+)
 ```
 
-### Configuration Validation
+Run the full pipeline against live SLS logs:
 
-```python
-config = ResQConfig()
-issues = config.validate()
-if issues:
-    print("Configuration issues:")
-    for issue in issues:
-        print(f"  - {issue}")
-else:
-    print("Configuration valid!")
-    print(config.summary())
+```bash
+python main.py --sls-incident demo/sample_incidents/sls_incident.json
 ```
-
-### OSS Report Storage
-
-```python
-from integrations.oss_client import OSSClient
-
-# Initialize OSS client
-oss = OSSClient()
-
-# Upload incident report
-report = {
-    "incident_id": "INC-2026-001",
-    "root_cause": "Database connection pool exhaustion",
-    "findings": [...],
-    "action_plan": [...],
-}
-key = oss.upload_report("INC-2026-001", report)
-# Returns: incidents/2026-07-12/INC-2026-001.json
-
-# Retrieve report
-report = oss.get_report("INC-2026-001", date="2026-07-12")
-
-# List all incidents for a date
-incidents = oss.list_incidents("2026-07-12")
-```
-
-## Integration Status
-
-| Integration | Status | Description |
-|------------|--------|-------------|
-| SLS Logs | ✓ Ready | Alibaba Cloud Log Service |
-| Prometheus | ✓ Ready | Metrics collection |
-| Source Indexer | ✓ Ready | Local + GitHub repos |
-| Redis Probe | ✓ Ready | Cache health checks |
-| PostgreSQL Probe | ✓ Ready | Database health checks |
-| Kafka Probe | ✓ Ready | Message queue health |
-| RabbitMQ Probe | ✓ Ready | Message broker health |
-| Alert Webhook | ✓ Ready | Grafana, PagerDuty, etc. |
-| OSS Storage | ✓ Ready | Report storage to Alibaba Cloud OSS |
-
-## Next Steps
-
-The agents need to be updated to use these integrations instead of the demo app. This will allow ResQ to:
-
-1. Query real metrics from Prometheus
-2. Read actual source code when analyzing errors
-3. Check infrastructure health (Redis, DB, Kafka)
-4. Receive real alerts from monitoring systems

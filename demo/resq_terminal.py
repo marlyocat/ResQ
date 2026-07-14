@@ -148,24 +148,46 @@ def _parse_json(text):
     return json.loads(cleaned)
 
 
-def _read_source_code(file_path, line_number, context_lines=5):
-    """Read source code around a specific line number."""
+def _read_source_code(file_path, line_number, context_lines=5, function=None):
+    """Read source around an error location.
+
+    Prefers the function definition as the anchor (robust to stale/approximate
+    line numbers in log markers); falls back to the reported line number.
+    """
     try:
         # Handle relative paths
         if not os.path.isabs(file_path):
             file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), file_path)
-        
-        with open(file_path, 'r') as f:
+
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
-        
-        start = max(0, line_number - context_lines - 1)
-        end = min(len(lines), line_number + context_lines)
-        
+
+        # Coerce the reported line to an int if possible.
+        try:
+            anchor = int(line_number)
+        except (TypeError, ValueError):
+            anchor = None
+
+        # Prefer anchoring on the function definition if we have its name.
+        if function:
+            import re as _re
+            pat = _re.compile(rf"\bdef\s+{_re.escape(str(function))}\s*\(")
+            for i, ln in enumerate(lines, 1):
+                if pat.search(ln):
+                    anchor = i
+                    break
+
+        if not anchor or anchor < 1:
+            anchor = 1
+
+        start = max(0, anchor - context_lines - 1)
+        end = min(len(lines), anchor + context_lines)
+
         code_context = []
         for i in range(start, end):
-            marker = " >>> " if i + 1 == line_number else "     "
+            marker = " >>> " if i + 1 == anchor else "     "
             code_context.append(f"{marker}{i+1:4d}: {lines[i].rstrip()}")
-        
+
         return "\n".join(code_context)
     except Exception as e:
         return f"Could not read source: {e}"
@@ -221,7 +243,8 @@ def run_log_analyzer(logs_data):
                     for h in hypotheses:
                         code_loc = h.get("code_location")
                         if code_loc and code_loc.get("file") and code_loc.get("line"):
-                            source = _read_source_code(code_loc["file"], code_loc["line"])
+                            source = _read_source_code(code_loc["file"], code_loc["line"],
+                                                       function=code_loc.get("function"))
                             h["source_code"] = source
                             add_event("Log Analyzer", f"Read source: {code_loc['file']}:{code_loc['line']}")
                     
@@ -254,22 +277,7 @@ def run_metric_monitor(metrics_data):
             try:
                 hypotheses = _parse_json(raw)
                 if isinstance(hypotheses, list) and hypotheses:
-                    # Fix evidence to reference actual metric values
-                    for h in hypotheses:
-                        if metrics_data:
-                            first = metrics_data[0]
-                            last = metrics_data[-1]
-                            actual_evidence = []
-                            if last.get("error_rate", 0) > 5:
-                                actual_evidence.append(f"Error rate peaked at {last['error_rate']:.1f}%")
-                            if last.get("p99_latency_ms", 0) > 500:
-                                actual_evidence.append(f"P99 latency reached {last['p99_latency_ms']:.0f}ms")
-                            if last.get("cpu_pct", 0) > 50:
-                                actual_evidence.append(f"CPU usage at {last['cpu_pct']:.1f}%")
-                            if last.get("memory_mb", 0) > 100:
-                                actual_evidence.append(f"Memory at {last['memory_mb']:.0f}MB")
-                            if actual_evidence:
-                                h["evidence"] = actual_evidence
+                    # Use the model's own hypotheses + evidence verbatim (authentic output).
                     agent["findings"] = hypotheses
                     agent["status"] = "done"
                     agent["message"] = f"Produced {len(hypotheses)} hypotheses (Qwen API)"
@@ -512,7 +520,8 @@ def run_negotiation():
         for h in revised_log:
             loc = h.get("code_location")
             if loc and loc.get("file") and loc.get("line"):
-                h["source_code"] = _read_source_code(loc["file"], loc["line"])
+                h["source_code"] = _read_source_code(loc["file"], loc["line"],
+                                                     function=loc.get("function"))
         log_agent["findings"] = revised_log
     if revised_met:
         met_agent["findings"] = revised_met

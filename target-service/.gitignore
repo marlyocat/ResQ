@@ -1,0 +1,22 @@
+# Environment / secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Local data / artifacts
+*.db
+*.sqlite3
+local_reports/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

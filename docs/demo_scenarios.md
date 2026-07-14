@@ -87,7 +87,6 @@ Message queue connection is lost, breaking communication between Order Service a
 
 **Files involved:**
 - `target/app.py` — Message queue simulation
-- `demo/queue_simulator.py` — Queue failure simulation
 
 ---
 

@@ -2,52 +2,32 @@
 
 ## System Overview
 
-ResQ is a multi-agent incident response system that connects to real production infrastructure (logs, metrics, source code, databases) and automatically investigates incidents. Five specialized agents collaborate through a coordinator to diagnose root causes, execute remediation, and generate comprehensive post-mortem reports.
+ResQ is a multi-agent incident response system that connects to real production infrastructure (logs, metrics, source code, databases) and automatically investigates incidents. Five specialized agents collaborate — dividing the work, **negotiating when they disagree**, and arbitrating a final answer — to diagnose root causes, execute remediation, and generate comprehensive post-mortem reports.
 
 ## Architecture Diagram
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         INCIDENT DETECTION                              │
-│         (Alert Webhook / Metric Polling / Log Analysis)                 │
-└────────────────────────────────────────────────────────────────────────┘
-                                 │
-          ┌──────────────────────┴──────────────────────┐
-          ▼                                             ▼
-┌───────────────────────┐                   ┌───────────────────────────┐
-│    Log Analyzer       │                   │     Metric Monitor        │
-│  (SLS/Local logs)     │                   │  (Prometheus metrics)     │
-└───────────┬───────────┘                   └─────────────┬─────────────┘
-            │  diagnosis hypotheses                       │  diagnosis hypotheses
-            └──────────────┬──────────────────────────────┘
-                           ▼
-              ┌────────────────────────
-              │     Coordinator        │
-              │ (conflict resolution,  │
-              │  root cause arbitration)│
-              └────────────┬───────────┘
-                           │ verified root cause + action plan
-                           ▼
-              ┌────────────────────────┐
-              │   Runbook Executor     │
-              │ (automated remediation)│
-              └───────────────────────┘
-                           │
-                           ▼
-              ┌────────────────────────┐
-              │  Post-Mortem Writer    │
-              │ (incident documentation)│
-              ────────────┬───────────┘
-                           │
-                           ▼
-              ┌────────────────────────┐
-              │   OSS Report Storage   │
-              │  (Alibaba Cloud OSS)   │
-              └────────────────────────
+See [`docs/architecture.svg`](docs/architecture.svg) for the full diagram. The workflow runs in four phases:
 
-All agents powered by Qwen Cloud APIs
-Integrations: SLS, Prometheus, GitHub, Redis, PostgreSQL, Kafka, OSS
 ```
+INCIDENT DETECTION  (metric threshold crossed / incident fixture / SLS window)
+        │
+        ▼
+PHASE 1 · Parallel diagnosis        Log Analyzer  ‖  Metric Monitor
+        │                           (each from its own data source)
+        ▼
+PHASE 1.5 · Negotiation             on disagreement, agents exchange
+        │                           hypotheses + evidence (via MessageBus)
+        │                           and revise — cause vs. symptom, timeline
+        ▼
+PHASE 2 · Arbitration               Coordinator + ConsensusEngine
+        │                           → final root cause
+        ▼
+PHASE 3 · Remediation               Runbook Executor
+        ▼
+PHASE 4 · Documentation             Post-Mortem Writer → OSS report storage
+```
+
+All agents are powered by Qwen Cloud (qwen-plus). The target service runs on Alibaba Cloud ECS and exercises SLS, OSS, ECS, and CMS.
 
 ## Agent Roles
 
@@ -71,7 +51,7 @@ Integrations: SLS, Prometheus, GitHub, Redis, PostgreSQL, Kafka, OSS
 ### 2. Metric Monitor Agent
 **Responsibility:** Analyze system metrics (CPU, memory, latency, throughput, error rates) to detect anomalies and correlate with incident signals.
 
-**Input:** Time-series metrics from Prometheus
+**Input:** Time-series metrics from the target service's `/api/metrics` (or the incident fixture)
 **Output:** Diagnostic hypotheses with confidence scores
 
 **Capabilities:**
@@ -80,7 +60,7 @@ Integrations: SLS, Prometheus, GitHub, Redis, PostgreSQL, Kafka, OSS
 - Baseline comparison
 - Capacity analysis
 
-**Integration:** Prometheus API
+**Integration:** target service `/api/metrics` (the deployed service exposes host metrics via Alibaba CMS)
 
 ---
 
@@ -126,33 +106,35 @@ Integrations: SLS, Prometheus, GitHub, Redis, PostgreSQL, Kafka, OSS
 
 ---
 
+### Negotiation Round (Phase 1.5)
+
+Between parallel diagnosis and arbitration, ResQ runs a **negotiation round** — the "dialogue and negotiation" step. It is not a separate agent; it is a structured exchange between the Log Analyzer and Metric Monitor, implemented in [`core/negotiation.py`](core/negotiation.py).
+
+**Trigger:** the two specialists' top hypotheses name *different* root causes (heuristic overlap check).
+
+**Mechanism:** each agent is shown the other's hypotheses and evidence and asked to re-examine the incident — distinguishing a root cause from a downstream *symptom*, and using the timeline of which signal moved first — then to revise or defend its position. The exchange is routed over the `MessageBus` and recorded for audit.
+
+**Why it matters:** it lets a well-supported minority hypothesis override a loud-but-wrong one. On an ambiguous incident whose logs point at a memory leak but whose metrics reveal a cache failure, naive arbitration follows the loud signal and misdiagnoses; the negotiation round flips it to the correct root cause (see [Conflict Resolution](#conflict-resolution-mechanism) and [`docs/baseline_comparison.md`](docs/baseline_comparison.md)).
+
+---
+
 ## Integration Layer
 
 ### Log Sources
-- **Alibaba Cloud SLS** — Production log ingestion and querying
-- **Local files** — Development/testing logs
+- **Alibaba Cloud SLS** — Production log ingestion and querying (`--sls-incident`)
+- **Target service `/api/logs`** — the live TUI reads the target's log buffer
+- **Incident fixtures** — captured logs in `demo/sample_incidents/*.json`
 
 ### Metrics Sources
-- **Prometheus** — Time-series metrics collection
-- **Custom endpoints** — Application-specific metrics
+- **Target service `/api/metrics`** — request rate, error rate, latency percentiles, CPU/memory
+- **Incident fixtures** — captured metric series for the batch pipeline / baseline comparison
 
 ### Source Code
-- **Local repository** — Direct file system access
-- **GitHub** — API-based repository access
-
-### Infrastructure Probes
-- **Redis** — Cache health, memory usage, connection count
-- **PostgreSQL** — Database health, active connections, version
-- **Kafka** — Topic count, consumer groups
-- **RabbitMQ** — Queue health checks
-
-### Alert Ingestion
-- **Webhook server** — Receives alerts from Grafana, PagerDuty, etc.
-- **Normalized format** — Converts various alert formats to standard schema
+- **Local repository** — the Log Analyzer reads code at error locations (from `[file:…, func:…]` log markers)
 
 ### Report Storage
-- **Alibaba Cloud OSS** — Incident reports stored as JSON
-- **Structured paths** — `incidents/YYYY-MM-DD/incident_id.json`
+- **Alibaba Cloud OSS** — the target service stores incident reports as JSON (`reports/YYYY-MM-DD/<id>.json`) via `/api/reports`
+- **Local HTML report** — `core/report_generator.py` renders a self-contained report for the batch pipeline
 
 ---
 
@@ -190,70 +172,68 @@ All inter-agent communication uses a structured JSON format:
 
 ### Message Types
 
+The `MessageBus` carries the **negotiation exchange** between the two diagnostic agents (the phase order between agents is otherwise orchestrated directly by `ResQSwarm` in `main.py`):
+
 | Type | Sender | Recipient | Description |
 |------|--------|-----------|-------------|
-| `diagnosis_hypothesis` | Log Analyzer / Metric Monitor | Coordinator | Independent analysis results |
-| `arbitration_request` | Coordinator | — | Trigger for conflict resolution |
-| `action_plan` | Coordinator | Runbook Executor | Approved remediation steps |
-| `execution_result` | Runbook Executor | Coordinator | Remediation outcome |
-| `incident_complete` | Coordinator | Post-Mortem Writer | Signal to generate documentation |
-| `postmortem` | Post-Mortem Writer | — | Final incident report |
+| `hypotheses_shared` | Log Analyzer | Metric Monitor | Log Analyzer's hypotheses + evidence, shared for negotiation |
+| `hypotheses_shared` | Metric Monitor | Log Analyzer | Metric Monitor's hypotheses + evidence, shared for negotiation |
+
+The full message log (`bus.get_message_log()`) is attached to the incident result under `negotiation.message_log` for audit.
 
 ---
 
 ## Conflict Resolution Mechanism
 
-The Coordinator uses a **weighted evidence scoring** algorithm:
+ResQ resolves conflicts in two stages — **negotiation** (agents reconcile) then **arbitration** (weighted scoring):
 
-1. **Collect hypotheses** from Log Analyzer and Metric Monitor
-2. **Cross-reference** evidence — do both agents point to the same cause?
-3. **Score each hypothesis:**
-   - Base confidence from agent (0-1)
-   - Evidence strength bonus (more evidence = higher weight)
-   - Cross-agent confirmation bonus (+0.15 if both agents agree)
-4. **Select top hypothesis** or request re-analysis if no clear winner
-5. **Justify decision** with evidence summary
+**Stage 1 — Negotiation ([`core/negotiation.py`](core/negotiation.py)):** if the specialists disagree, each re-examines the incident with the other's evidence and revises (see [Negotiation Round](#negotiation-round-phase-15)). This is what lets a correct minority view survive.
 
-### Example Conflict Scenario
+**Stage 2 — Arbitration ([`core/consensus.py`](core/consensus.py)):** the Coordinator's `ConsensusEngine` scores the (revised) hypotheses:
+1. Base confidence from the agent (0–1)
+2. Evidence strength bonus (more grounded evidence = higher weight, capped)
+3. Cross-agent confirmation bonus (+0.15 if both agents agree)
+4. Select the top-scoring hypothesis; justify with an evidence summary
+
+### Example Conflict Scenario (the ambiguous incident)
 
 ```
-Log Analyzer: "Database connection pool exhausted (confidence: 0.80)"
-  Evidence: [connection timeout errors, pool size at max]
-  Code: src/db.py:142 (get_connection)
+Log Analyzer:   "Memory leak / JVM heap exhaustion" (confidence high)
+  Evidence: [heap climbing, GC pauses, OOM watchdog] — the LOUD signal in the logs
 
-Metric Monitor: "CPU throttling due to runaway query (confidence: 0.75)"
-  Evidence: [CPU spike at 95%, query latency 10x baseline]
+Metric Monitor: "Cache node failure → cache-miss storm overwhelming the DB"
+  Evidence: [cache hit rate collapsed FIRST, memory bounded, pool not maxed]
 
-Coordinator Resolution:
-  → Both point to database issues, different root causes
-  → Cross-check: connection exhaustion can cause CPU spike (waiting queries pile up)
-  → Final: "Database connection pool exhaustion causing cascade (confidence: 0.85)"
-  → Action: Increase pool size + add query timeout
+Naive arbitration (no dialogue):
+  → picks the high-confidence memory hypothesis  →  WRONG (memory is a symptom)
+
+With negotiation (Phase 1.5):
+  → Log Analyzer, shown the metric timeline, drops the memory-leak hypothesis
+  → Coordinator arbitrates the revised set  →  correct cache root cause
 ```
+
+This before/after is measured in [`docs/baseline_comparison.md`](docs/baseline_comparison.md): accuracy on this incident goes **0.0 (naive) → 1.0 (negotiated)**.
 
 ---
 
 ## Incident Detection Methods
 
-### 1. Alert Webhook (Recommended)
-```
-Grafana/PagerDuty → POST /webhook/alert → ResQ investigates
-```
-
-### 2. Metric Polling
+### 1. Metric Polling (live TUI)
 ```python
-# Every 30 seconds
-error_rate = prometheus.get_error_rate("my-app")
-if error_rate > 0.05:  # 5% threshold
+# demo/resq_terminal.py polls the target service every ~1.5s
+m = requests.get(f"{TARGET_URL}/api/metrics").json()
+if m["error_rate"] > 8 or m["p99_latency_ms"] > 1500:
     trigger_investigation()
 ```
 
-### 3. Log Analysis
-```python
-# Every minute
-recent_errors = sls.query("level: ERROR | SELECT count(*) as cnt")
-if recent_errors > baseline * 3:  # 3x normal
-    trigger_investigation()
+### 2. Incident fixture (batch)
+```bash
+python main.py --incident demo/sample_incidents/high_cpu.json
+```
+
+### 3. Live SLS logs (batch)
+```bash
+python main.py --sls-incident demo/sample_incidents/sls_incident.json
 ```
 
 ---
@@ -261,26 +241,24 @@ if recent_errors > baseline * 3:  # 3x normal
 ## Data Flow
 
 ```
-1. Incident trigger (webhook alert / metric anomaly / log spike)
+1. Incident trigger (metric threshold crossed / incident fixture / SLS window)
    ↓
-2. Log Analyzer + Metric Monitor (parallel execution)
-   ↓  (each queries real infrastructure)
-3. Source Code Indexer (reads code at error locations)
+2. Phase 1 — Log Analyzer + Metric Monitor (parallel; each on its own data)
+   ↓   (Log Analyzer also reads source code at error locations)
+3. Phase 1.5 — Negotiation: if they disagree, agents exchange evidence and revise
    ↓
-4. Infrastructure Probes (check Redis/DB/Kafka health)
+4. Phase 2 — Coordinator + ConsensusEngine arbitrate the revised hypotheses
+   ↓   → verified root cause + action plan
+5. Phase 3 — Runbook Executor generates/simulates remediation
    ↓
-5. Coordinator receives all analyses
-   ↓  (conflict resolution)
-6. Coordinator produces action plan
+6. Phase 4 — Post-Mortem Writer generates report (grounded in actual data)
    ↓
-7. Runbook Executor applies fix
-   ↓  (verifies result)
-8. Post-Mortem Writer generates report (grounded in actual data)
-   ↓
-9. Report uploaded to OSS
-   ↓
-10. Incident closed
+7. Report uploaded to OSS  →  incident closed
 ```
+
+> The investigator side (`integrations/`) is two modules: `qwen_client.py`
+> (agent reasoning) and `alibaba_cloud.py` (SLS log reads). The deployed backend
+> and its full SLS/OSS/ECS/CMS usage live in `target-service/`.
 
 ---
 
@@ -317,73 +295,75 @@ ResQ includes a real-time terminal UI built with Textual:
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| **LLM** | Qwen Cloud (qwen-plus) | Agent reasoning and analysis |
+| **LLM** | Qwen Cloud (qwen-plus) | Agent reasoning, negotiation, analysis |
 | **Terminal UI** | Textual + Rich | Live investigation display |
-| **Logs** | Alibaba Cloud SLS | Log ingestion and querying |
-| **Metrics** | Prometheus | Time-series metrics |
-| **Storage** | Alibaba Cloud OSS | Report storage |
-| **Source Code** | Local/GitHub | Code analysis |
-| **Infrastructure** | Redis, PostgreSQL, Kafka | Health probes |
+| **Compute** | Alibaba Cloud ECS | Hosts the target service |
+| **Logs** | Alibaba Cloud SLS | Real-time log shipping + querying |
+| **Storage** | Alibaba Cloud OSS | Incident report storage |
+| **Monitoring** | Alibaba Cloud CMS | Host metrics |
 | **Deployment** | Docker + Terraform | Infrastructure as code |
 
 ---
 
 ## Multi-Agent vs Single-Agent Comparison
 
-### Why Multi-Agent Wins
+### Measured results
+
+ResQ ships a reproducible 3-way benchmark (`python main.py --baseline-comparison <incident.json>`) that runs the identical incident through a single-agent baseline, a naive multi-agent swarm, and the negotiated swarm. Average diagnostic accuracy over two incidents:
+
+| Pipeline | Avg accuracy |
+|----------|:---:|
+| Single-agent | 0.75 |
+| Multi-agent (naive arbitration) | 0.50 |
+| **Multi-agent (negotiated)** | **1.00** |
+
+The negotiated swarm is the only pipeline that solves both a clear-cut and an ambiguous incident — at a latency cost (~140s vs ~25s). Full methodology and per-metric numbers: [`docs/baseline_comparison.md`](docs/baseline_comparison.md).
+
+### Why it wins
 
 | Aspect | Single Agent | Multi-Agent (ResQ) |
 |--------|-------------|-------------------|
 | **Context window** | Must hold all signals in one prompt | Each agent focuses on one signal type |
 | **Diagnostic depth** | Broad but shallow analysis | Deep, specialized analysis per agent |
-| **Conflict detection** | No internal debate | Agents independently diagnose, conflicts surfaced |
-| **Hallucination risk** | Higher — fabricates connections | Lower — evidence must be grounded in data |
-| **Scalability** | Linear — one prompt chain | Parallel — agents can run concurrently |
-| **Auditability** | Single narrative, hard to trace | Each agent's reasoning is transparent |
+| **Conflict resolution** | No internal debate | Agents surface conflicts and **negotiate** to resolve them |
+| **Robustness on ambiguity** | Anchors on the loudest signal | Cross-references specialists; symptom ≠ cause |
+| **Auditability** | Single narrative, hard to trace | Each agent's reasoning + the negotiation log are transparent |
 
 ---
 
 ## Alibaba Cloud Integration
 
-ResQ demonstrates comprehensive Alibaba Cloud API usage:
+The **target service** runs on Alibaba Cloud ECS and exercises four services through the official SDKs — this is the deployment proof. Real client code:
 
-1. **SLS (Simple Log Service)** — Log ingestion and querying via API
-2. **OSS (Object Storage Service)** — Incident report storage
-3. **ECS (Elastic Compute Service)** — Hosting the agent orchestration service
-4. **Terraform** — Infrastructure provisioning via `deploy/terraform/`
+1. **SLS** (Simple Log Service) — real-time log shipping + query: [`target-service/integrations/sls_client.py`](target-service/integrations/sls_client.py) (`PutLogs`/`GetLogs`)
+2. **OSS** (Object Storage) — report storage: [`target-service/integrations/oss_client.py`](target-service/integrations/oss_client.py)
+3. **ECS** (Elastic Compute) — infrastructure context: [`target-service/integrations/ecs_client.py`](target-service/integrations/ecs_client.py) (`DescribeInstances`)
+4. **CMS** (Cloud Monitor) — host metrics: [`target-service/integrations/cms_client.py`](target-service/integrations/cms_client.py) (`DescribeMetricLast`)
 
-See `integrations/` directory for all integration implementations.
+Infrastructure-as-code (VPC + ECS + SLS + OSS) is in [`target-service/deploy/terraform/`](target-service/deploy/terraform/); the deploy runbook is [`target-service/DEPLOY.md`](target-service/DEPLOY.md).
+
+ResQ's own [`integrations/`](integrations/) layer is the investigator side: `qwen_client.py` (agent reasoning) and `alibaba_cloud.py` (SLS log fetching for `--sls-incident`).
 
 ---
 
 ## Configuration
 
-All integrations configured via `.env` file:
+Investigator side — configure via `.env`:
 
 ```bash
-# Required
+# Required — all agent reasoning
 QWEN_API_KEY=your_key
 
-# Logs
+# Optional — live SLS log reads (main.py --sls-incident)
+ALIBABA_ACCESS_KEY_ID=your_key
+ALIBABA_ACCESS_KEY_SECRET=your_secret
+ALIBABA_REGION_ID=ap-southeast-3
 SLS_PROJECT=your-project
 SLS_LOGSTORE=your-logstore
 
-# Metrics
-PROMETHEUS_URL=http://localhost:9090
-
-# Source Code
-SOURCE_LOCAL_PATH=/path/to/repo
-
-# Infrastructure
-REDIS_URL=redis://localhost:6379
-DATABASE_URL=postgresql://user:pass@host:5432/db
-
-# Report Storage
-OSS_ENDPOINT=https://oss-cn-hangzhou.aliyuncs.com
-OSS_BUCKET_NAME=resq-reports
-
-# Alerts
-RESQ_WEBHOOK_PORT=5001
+# Optional — point the terminal at a remote target service
+RESQ_TARGET_URL=http://<ecs-ip>:8000
 ```
 
-See `.env.example` for complete configuration template.
+See `.env.example` for the template. The **target service's** own configuration
+(SLS/OSS/ECS/CMS) is documented in [`target-service/`](target-service/).

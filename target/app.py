@@ -251,7 +251,7 @@ def _record_metrics_snapshot():
             if proc_cpu:
                 cpu_pct = round(proc_cpu.cpu_percent(), 1)
             else:
-                cpu_pct = round(os.cpu_percent(interval=0.5) or 0, 1)
+                cpu_pct = 0.0  # psutil unavailable; CPU metric not collected
             # Memory usage
             if proc:
                 mem_mb = round(proc.memory_info().rss / 1024 / 1024, 1)
@@ -476,7 +476,7 @@ def metrics():
         if proc_cpu:
             cpu_pct = round(proc_cpu.cpu_percent(), 1)
         else:
-            cpu_pct = round(os.cpu_percent(interval=0.5) or 0, 1)
+            cpu_pct = 0.0  # psutil unavailable; CPU metric not collected
         
         total_cache = cache_hits + cache_misses
         cache_hit_rate = round((cache_hits / max(total_cache, 1)) * 100, 1)
