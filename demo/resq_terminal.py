@@ -422,7 +422,15 @@ ROOT CAUSE DETERMINED:
             for i, step in enumerate(state["action_plan"]["steps"], 1):
                 action_plan_summary += f"{i}. {step}\n"
 
+        today = datetime.now().strftime("%Y-%m-%d")
+        window = f"{state.get('incident_start', '?')} to {state.get('incident_end', '?')}"
+
         prompt = f"""Generate a comprehensive incident post-mortem report based on the ACTUAL data below.
+
+REPORT FACTS (use these verbatim — do NOT invent alternatives):
+- Date: {today}
+- Detection-to-resolution window: {window}
+- Prepared by: ResQ Autonomous Incident Response System
 
 INCIDENT TIMELINE:
 {transcript}
@@ -444,7 +452,11 @@ Write a professional post-mortem with:
 Be specific and reference actual data points."""
 
         raw = _call_qwen(
-            "You are a technical writer creating an incident post-mortem. Use ONLY the actual data provided - do not invent or assume any information.",
+            "You are a technical writer creating an incident post-mortem. Use ONLY the actual data "
+            "provided. Do NOT fabricate any of the following: incident ID numbers (e.g. 'RESQ-2024-###'), "
+            "calendar dates, author names, or exact source-file paths and line numbers. Use the Date given "
+            "in REPORT FACTS; if a value is not provided, omit it rather than inventing one. Only cite a "
+            "specific file/line if it appears verbatim in the provided timeline or findings.",
             prompt
         )
         if raw:
