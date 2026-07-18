@@ -160,6 +160,12 @@ def _read_source_code(file_path, line_number, context_lines=5, function=None):
         if not os.path.isabs(file_path):
             file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), file_path)
 
+        # The model often invents a plausible-but-nonexistent path (and remote
+        # targets don't share our filesystem). If we can't see the file, skip the
+        # source snippet entirely rather than surfacing a raw OS error.
+        if not os.path.isfile(file_path):
+            return None
+
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
 
@@ -190,8 +196,9 @@ def _read_source_code(file_path, line_number, context_lines=5, function=None):
             code_context.append(f"{marker}{i+1:4d}: {lines[i].rstrip()}")
 
         return "\n".join(code_context)
-    except Exception as e:
-        return f"Could not read source: {e}"
+    except Exception:
+        # Never surface a raw read error into the UI — just omit the snippet.
+        return None
 
 
 def _call_qwen(system_prompt, user_input):
@@ -246,8 +253,9 @@ def run_log_analyzer(logs_data):
                         if code_loc and code_loc.get("file") and code_loc.get("line"):
                             source = _read_source_code(code_loc["file"], code_loc["line"],
                                                        function=code_loc.get("function"))
-                            h["source_code"] = source
-                            add_event("Log Analyzer", f"Read source: {code_loc['file']}:{code_loc['line']}")
+                            if source:
+                                h["source_code"] = source
+                                add_event("Log Analyzer", f"Read source: {code_loc['file']}:{code_loc['line']}")
                     
                     agent["findings"] = hypotheses
                     agent["status"] = "done"
@@ -595,8 +603,10 @@ def run_negotiation():
         for h in revised_log:
             loc = h.get("code_location")
             if loc and loc.get("file") and loc.get("line"):
-                h["source_code"] = _read_source_code(loc["file"], loc["line"],
-                                                     function=loc.get("function"))
+                src = _read_source_code(loc["file"], loc["line"],
+                                        function=loc.get("function"))
+                if src:
+                    h["source_code"] = src
         log_agent["findings"] = revised_log
     if revised_met:
         met_agent["findings"] = revised_met
