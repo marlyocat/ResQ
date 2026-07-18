@@ -94,6 +94,8 @@ state = {
     "root_cause": None,
     "action_plan": None,
     "postmortem": None,
+    "final_verdict": None,
+    "incident_id": None,
     "oss_report_key": None,
     "negotiation": {
         "status": "idle",          # idle | running | done
@@ -363,6 +365,52 @@ def run_remediation(action_plan):
     add_event("Runbook Executor", "Analysis unavailable - Qwen API required")
 
 
+def build_final_verdict() -> dict:
+    """Build the authoritative bottom-line verdict from real structured state.
+
+    Deterministic (no LLM), so it always reflects what the agents actually
+    decided and can never fabricate. Returned both as structured fields (for the
+    OSS report) and as a markdown block (prepended to the post-mortem)."""
+    rc = state.get("root_cause") or {}
+    neg = state.get("negotiation") or {}
+    conf = rc.get("confidence", 0)
+    conf_pct = int(conf * 100) if isinstance(conf, (int, float)) else 0
+    cause = rc.get("cause", "Undetermined")
+    severity = str(rc.get("severity", "unknown")).upper()
+
+    if neg.get("disagreement") is True:
+        method = ("Specialists initially disagreed; reconciled through inter-agent "
+                  "negotiation, then confirmed by the Coordinator.")
+    elif neg.get("disagreement") is False:
+        method = "Specialists agreed independently; confirmed by the Coordinator."
+    else:
+        method = "Determined by the Coordinator."
+
+    steps = (state.get("action_plan") or {}).get("steps") or []
+    first_action = steps[0] if steps else "See Action Items in the post-mortem."
+
+    markdown = "\n".join([
+        "## Final Verdict",
+        "",
+        f"- **Root cause:** {cause}",
+        f"- **Severity:** {severity}",
+        f"- **Confidence:** {conf_pct}%",
+        f"- **How determined:** {method}",
+        f"- **Immediate action:** {first_action}",
+        "",
+        "---",
+        "",
+    ])
+    return {
+        "root_cause": cause,
+        "severity": severity,
+        "confidence_pct": conf_pct,
+        "how_determined": method,
+        "immediate_action": first_action,
+        "markdown": markdown,
+    }
+
+
 def run_postmortem():
     agent = state["agents"]["postmortem_writer"]
     agent["status"] = "running"
@@ -423,11 +471,14 @@ ROOT CAUSE DETERMINED:
                 action_plan_summary += f"{i}. {step}\n"
 
         today = datetime.now().strftime("%Y-%m-%d")
-        window = f"{state.get('incident_start', '?')} to {state.get('incident_end', '?')}"
+        end = state.get("incident_end") or "(automated resolution confirmed)"
+        window = f"{state.get('incident_start', '?')} to {end}"
+        incident_id = state.get("incident_id") or "N/A"
 
         prompt = f"""Generate a comprehensive incident post-mortem report based on the ACTUAL data below.
 
 REPORT FACTS (use these verbatim — do NOT invent alternatives):
+- Incident ID: {incident_id}
 - Date: {today}
 - Detection-to-resolution window: {window}
 - Prepared by: ResQ Autonomous Incident Response System
@@ -453,14 +504,17 @@ Be specific and reference actual data points."""
 
         raw = _call_qwen(
             "You are a technical writer creating an incident post-mortem. Use ONLY the actual data "
-            "provided. Do NOT fabricate any of the following: incident ID numbers (e.g. 'RESQ-2024-###'), "
-            "calendar dates, author names, or exact source-file paths and line numbers. Use the Date given "
-            "in REPORT FACTS; if a value is not provided, omit it rather than inventing one. Only cite a "
-            "specific file/line if it appears verbatim in the provided timeline or findings.",
+            "provided. Use the Incident ID and Date from REPORT FACTS EXACTLY as given — never coin your "
+            "own identifier (no 'RESQ-YYYY-###' style IDs). Do NOT fabricate calendar dates, author names, "
+            "or exact source-file paths and line numbers. If a value is not provided, omit it rather than "
+            "inventing one. Only cite a specific file/line if it appears verbatim in the provided data.",
             prompt
         )
         if raw:
-            state["postmortem"] = raw
+            verdict = build_final_verdict()
+            state["final_verdict"] = verdict
+            # Lead the report with the authoritative, data-derived verdict.
+            state["postmortem"] = verdict["markdown"] + raw
             agent["status"] = "done"
             agent["message"] = "Report generated (Qwen API)"
             add_event("Post-Mortem Writer", "Report generated (Qwen API)")
@@ -484,13 +538,14 @@ def store_report_to_oss():
     agent = state["agents"]["postmortem_writer"]
     rc = state.get("root_cause") or {}
     negotiation = state.get("negotiation") or {}
-    incident_id = f"incident-{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+    incident_id = state.get("incident_id") or f"incident-{datetime.now().strftime('%Y%m%dT%H%M%S')}"
 
     report = {
         "id": incident_id,
         "summary": rc.get("cause", "Incident investigated by ResQ"),
         "severity": rc.get("severity", "unknown"),
         "confidence": rc.get("confidence", 0),
+        "final_verdict": state.get("final_verdict") or build_final_verdict(),
         "root_cause": rc,
         "action_plan": state.get("action_plan", {}),
         "peak_metrics": state.get("peak_metrics", {}),
@@ -661,10 +716,13 @@ def run_investigation(logs_snapshot, metrics_snapshot):
     add_event("System", "Phase 3: Runbook execution")
     run_remediation(state["action_plan"] or {})
 
+    # Stamp resolution time + a stable incident id BEFORE the post-mortem, so the
+    # writer sees the real window/id instead of inventing them.
+    state["incident_end"] = datetime.now().strftime("%H:%M:%S")
+    state["incident_id"] = f"incident-{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+
     add_event("System", "Phase 4: Post-mortem generation")
     run_postmortem()
-
-    state["incident_end"] = datetime.now().strftime("%H:%M:%S")
 
     add_event("System", "Phase 5: Persisting report to Alibaba OSS")
     store_report_to_oss()
