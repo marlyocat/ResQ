@@ -2,6 +2,12 @@
 
 An agentic incident response system where specialized AI agents collaborate to diagnose, resolve, and document production incidents. Built for the **1st Qwen Cloud Global AI Hackathon** (Agent Society Track).
 
+## 🎥 Demo Video
+
+[![ResQ demo video](https://img.youtube.com/vi/aSpu4nf8DWw/maxresdefault.jpg)](https://www.youtube.com/watch?v=aSpu4nf8DWw)
+
+▶️ **[Watch the ResQ demo on YouTube](https://www.youtube.com/watch?v=aSpu4nf8DWw)** — see the agents investigate a live incident end-to-end.
+
 ## Overview
 
 ResQ connects to your existing infrastructure (logs, metrics, source code, databases) and automatically investigates incidents when they occur. Five specialized agents work in parallel to identify root causes and generate actionable remediation plans.
