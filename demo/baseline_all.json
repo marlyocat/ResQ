@@ -52,48 +52,48 @@
     "ground_truth_root_cause": "Cache node failure causing a cache-miss storm that overwhelmed the database",
     "single_agent": {
       "pipeline": "single_agent",
-      "time_to_diagnosis_s": 26.74,
+      "time_to_diagnosis_s": 24.03,
       "diagnostic_accuracy": 1.0,
       "hypotheses_generated": 3,
       "evidence_quality": 12,
       "postmortem_completeness": 1.0,
-      "identified_root_cause": "Simultaneous failure of cache-node-2 and absence of a covering database index on the 'category' column in the products table created a cascading failure: cache misses flooded the DB with expensive unindexed queries, exhausting connection pool and memory, which degraded API responsiveness and triggered OOM conditions and 503 errors."
+      "identified_root_cause": "Failure of cache-node-2 at 03:09:40Z caused catastrophic cache miss storm (hit rate collapsed from ~95% to <5%), which flooded the API with uncached product queries; the unindexed 'category' filter in the products query then saturated the DB connection pool and induced severe memory pressure due to buffered requests and GC thrashing \u2014 exposing insufficient JVM heap sizing and lack of circuit-breaking or graceful degradation for cache failures."
     },
     "multi_agent_naive": {
       "pipeline": "multi_agent_naive",
-      "time_to_diagnosis_s": 117.97,
+      "time_to_diagnosis_s": 131.9,
       "diagnostic_accuracy": 0.0,
-      "hypotheses_generated": 8,
-      "evidence_quality": 28,
-      "postmortem_completeness": 1.0,
-      "identified_root_cause": "JVM heap exhaustion leading to GC thrashing and service degradation"
-    },
-    "multi_agent_negotiated": {
-      "pipeline": "multi_agent_negotiated",
-      "time_to_diagnosis_s": 142.34,
-      "diagnostic_accuracy": 1.0,
       "hypotheses_generated": 7,
       "evidence_quality": 25,
       "postmortem_completeness": 1.0,
-      "identified_root_cause": "Cache failure (node-2 loss) triggering massive cache miss cascade, overwhelming the database and initiating a failure chain across service-api"
+      "identified_root_cause": "JVM heap exhaustion due to memory leak or insufficient heap allocation, triggering cascading failures"
+    },
+    "multi_agent_negotiated": {
+      "pipeline": "multi_agent_negotiated",
+      "time_to_diagnosis_s": 143.53,
+      "diagnostic_accuracy": 1.0,
+      "hypotheses_generated": 7,
+      "evidence_quality": 26,
+      "postmortem_completeness": 1.0,
+      "identified_root_cause": "Cache-node-2 failure causing catastrophic cache miss surge, which overloaded the database and triggered cascading resource exhaustion (connection pool saturation, memory pressure, GC thrashing)"
     },
     "deltas": {
       "diagnostic_accuracy": 0.0,
       "hypotheses_generated": 4,
-      "evidence_quality": 13,
+      "evidence_quality": 14,
       "postmortem_completeness": 0.0,
-      "time_to_diagnosis_s": 115.6
+      "time_to_diagnosis_s": 119.5
     },
     "negotiation_dialogue": {
       "disagreement_detected": true,
       "converged_after_negotiation": true,
       "log_analyzer": {
-        "before": "jvm heap exhaustion leading to garbage collection thrashing and eventual oom conditions in service-api",
-        "after": "cache failure (node-2 loss) triggering massive cache miss cascade, overwhelming the database and initiating a failure chain across service-api"
+        "before": "jvm heap exhaustion leading to gc thrashing and eventual oom conditions in service-api",
+        "after": "cache-node-2 failure causing catastrophic cache miss surge, which overloaded the database and triggered cascading resource exhaustion (connection pool saturation, memory pressure, gc thrashing)"
       },
       "metric_monitor": {
         "before": "cache eviction or cache failure causing massive cache misses, forcing all requests to hit the database",
-        "after": "jvm heap exhaustion triggering gc thrashing, which degraded cache-client responsiveness and caused cache-node-2 connection loss \u2014 leading to cache bypass, database overload, and cascading request queue saturation"
+        "after": "jvm heap exhaustion triggering gc thrashing, which degraded cache performance (causing massive cache misses) and starved database connection acquisition \u2014 making the cache failure and db pool exhaustion downstream symptoms"
       }
     }
   }

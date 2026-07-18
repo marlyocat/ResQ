@@ -56,14 +56,14 @@ data "archive_file" "app" {
   }
 }
 
-# ── Upload the zip to OSS (public-read so the instance can curl it) ──────────
+# ── Upload the zip to OSS (private; the instance downloads it with credentials
+#    via ossutil in user_data — no public access needed) ───────────────────────
 resource "alicloud_oss_bucket_object" "app" {
   count        = var.create_ecs ? 1 : 0
   bucket       = alicloud_oss_bucket.reports.bucket
   key          = local.app_zip_key
   source       = data.archive_file.app[0].output_path
   content_type = "application/zip"
-  acl          = "public-read"
 }
 
 # ── Networking ──────────────────────────────────────────────────────────────
@@ -71,12 +71,16 @@ data "alicloud_zones" "default" {
   count                       = var.create_ecs ? 1 : 0
   available_resource_creation = "Instance"
   available_instance_type     = data.alicloud_instance_types.default[0].instance_types[0].id
+  available_disk_category     = "cloud_essd"
 }
 
 data "alicloud_instance_types" "default" {
-  count          = var.create_ecs ? 1 : 0
-  cpu_core_count = var.ecs_instance_cpu
-  memory_size    = var.ecs_instance_memory
+  count = var.create_ecs ? 1 : 0
+  # Only return types that actually support the ESSD system disk we attach below,
+  # otherwise RunInstances fails with InvalidInstanceType.NotSupportDiskCategory.
+  cpu_core_count       = var.ecs_instance_cpu
+  memory_size          = var.ecs_instance_memory
+  system_disk_category = "cloud_essd"
 }
 
 data "alicloud_images" "ubuntu" {
@@ -143,6 +147,7 @@ resource "alicloud_instance" "app" {
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
     app_zip_url     = local.app_zip_url
+    app_zip_key     = local.app_zip_key
     access_key      = var.access_key
     secret_key      = var.secret_key
     region          = var.region

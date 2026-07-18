@@ -137,19 +137,24 @@ def _record_request(response):
 
 # ── Failure scenarios (for the ResQ TUI demo) ────────────────────────────
 def _cache_incident_log_loop():
-    """Flood the log with ONLY memory/GC 'red herring' lines while the cache
-    incident is active — no cache or database terms appear in the logs at all.
-    The true cause (a cache-hit-rate collapse, with memory staying bounded) shows
-    up ONLY in the metrics. So the Log Analyzer (reads logs) concludes 'memory
-    leak' while the Metric Monitor (reads metrics) concludes 'cache failure' —
-    a genuine disagreement the negotiation round must resolve."""
-    heap = 2.4
+    """Emit memory/GC-pressure 'red herring' lines while the cache incident is
+    active — the logs carry no cache or database terms, so the Log Analyzer (reads
+    logs) leans toward a memory problem while the Metric Monitor (reads metrics)
+    sees the cache-hit-rate collapse. That is the genuine disagreement the
+    negotiation round resolves.
+
+    Crucially, the memory pressure described here is BOUNDED and consistent with
+    the service's real, small RSS (reported truthfully in /api/metrics as
+    memory_mb, ~tens of MB). It is a plausible downstream symptom of the request
+    pile-up — NOT a fabricated multi-GB heap. That internal consistency is the
+    'tell': memory is elevated but stable and bounded, so it cannot be a leak, and
+    the negotiation can correctly reattribute the incident to the cache (which is
+    what actually moved first, per the metrics)."""
     while not _cache_incident_stop.is_set() and degraded:
-        heap = min(3.2, heap + 0.1)  # the LOG claims a rising heap (the decoy)...
-        log_event("WARN", f"heap usage climbing: {heap:.1f}GB / 4GB, allocation rate elevated", service="flaskapp")
-        log_event("WARN", f"GC pause {random.randint(420, 680)}ms (full GC), throughput degraded", service="flaskapp")
-        log_event("WARN", "high memory pressure — request buffers accumulating on the heap", service="flaskapp")
-        log_event("ERROR", f"OOM candidate flagged by memory watchdog (heap {heap:.1f}GB)", service="flaskapp")
+        rss = _proc.memory_info().rss / 1024 / 1024 if PSUTIL_AVAILABLE else 95.0
+        log_event("WARN", f"GC pause {random.randint(140, 280)}ms, minor-collection frequency elevated", service="flaskapp")
+        log_event("WARN", f"heap ~{rss:.0f}MB (stable), request buffers queuing — worker pool saturated", service="flaskapp")
+        log_event("WARN", "elevated memory pressure: requests backing up faster than they drain", service="flaskapp")
         _cache_incident_stop.wait(2.0)
 
 

@@ -61,8 +61,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
-# Shared negotiation logic (same prompt + convergence heuristic as the batch path)
-from core.negotiation import NEGOTIATION_SUFFIX, causes_agree
+# Shared negotiation logic (same prompt + conflict detection as the batch path)
+from core.negotiation import NEGOTIATION_SUFFIX, causes_agree, CONFLICT_CHECK_SYSTEM
 
 try:
     from integrations.qwen_client import QwenClient
@@ -94,6 +94,7 @@ state = {
     "root_cause": None,
     "action_plan": None,
     "postmortem": None,
+    "oss_report_key": None,
     "negotiation": {
         "status": "idle",          # idle | running | done
         "disagreement": None,
@@ -452,6 +453,55 @@ Be specific and reference actual data points."""
     add_event("Post-Mortem Writer", "Analysis unavailable - Qwen API required")
 
 
+def store_report_to_oss():
+    """Phase 5 — persist ResQ's own investigation to Alibaba OSS.
+
+    Closes the loop: the post-mortem the swarm just produced is POSTed to the
+    monitored service's /api/reports endpoint, which writes it to OSS. This turns
+    the investigation into a real, retrievable artifact instead of ephemeral TUI
+    output. Best-effort — a storage failure never blocks incident resolution.
+    """
+    agent = state["agents"]["postmortem_writer"]
+    rc = state.get("root_cause") or {}
+    negotiation = state.get("negotiation") or {}
+    incident_id = f"incident-{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+
+    report = {
+        "id": incident_id,
+        "summary": rc.get("cause", "Incident investigated by ResQ"),
+        "severity": rc.get("severity", "unknown"),
+        "confidence": rc.get("confidence", 0),
+        "root_cause": rc,
+        "action_plan": state.get("action_plan", {}),
+        "peak_metrics": state.get("peak_metrics", {}),
+        "negotiation": {
+            "disagreement": negotiation.get("disagreement"),
+            "resolved": negotiation.get("resolved"),
+            "log_before": negotiation.get("log_before"),
+            "log_after": negotiation.get("log_after"),
+            "metric_before": negotiation.get("metric_before"),
+            "metric_after": negotiation.get("metric_after"),
+        },
+        "postmortem": state.get("postmortem", ""),
+        "detected_at": state.get("incident_start"),
+        "resolved_at": state.get("incident_end"),
+        "investigated_by": "ResQ multi-agent swarm (5 agents, Qwen Cloud)",
+    }
+
+    add_event("Post-Mortem Writer", "Persisting incident report to Alibaba OSS...")
+    try:
+        resp = requests.post(f"{TARGET_URL}/api/reports", json=report, timeout=10)
+        resp.raise_for_status()
+        oss_key = resp.json().get("oss_key", "")
+        state["oss_report_key"] = oss_key
+        agent["message"] = f"Report stored to OSS: {oss_key}"
+        add_event("Post-Mortem Writer", f"Report persisted to Alibaba OSS -> {oss_key}")
+    except Exception as e:  # noqa: BLE001 - storage is best-effort, never fatal
+        state["oss_report_key"] = None
+        agent["message"] = "Report generated (OSS storage unavailable)"
+        add_event("Post-Mortem Writer", f"OSS storage failed: {e}")
+
+
 def _top_cause(findings):
     """Highest-confidence hypothesis cause from a findings list."""
     if not findings:
@@ -480,6 +530,31 @@ def _negotiate_agent(agent_prompt, own_hyps, peer_name, peer_hyps):
     return None
 
 
+def _detect_disagreement(cause_a, cause_b):
+    """True if the two top causes name DIFFERENT root causes.
+
+    Uses the model to judge semantic conflict (a symptom is not its cause), which
+    is far more reliable than word overlap — the old keyword heuristic wrongly read
+    'memory leak' and 'cache failure' as agreement because both mention 'requests'/
+    'query'. Falls back to the hardened keyword heuristic if Qwen is unavailable.
+    """
+    if not (cause_a and cause_b):
+        return False
+    if QWEN_AVAILABLE:
+        raw = _call_qwen(
+            CONFLICT_CHECK_SYSTEM,
+            f"Hypothesis A: {cause_a}\n\nHypothesis B: {cause_b}\n\n"
+            "Do these identify the SAME root cause or DIFFERENT ones? Answer SAME or DIFFERENT.",
+        )
+        if raw:
+            ans = raw.strip().upper()
+            if ans.startswith("DIFFERENT"):
+                return True
+            if ans.startswith("SAME"):
+                return False
+    return not causes_agree(cause_a, cause_b)
+
+
 def run_negotiation():
     """Phase 1.5 — agents exchange hypotheses and reconcile disagreements.
 
@@ -495,7 +570,7 @@ def run_negotiation():
     met_before = _top_cause(met_agent["findings"])
     neg["log_before"], neg["metric_before"] = log_before, met_before
 
-    disagreement = bool(log_before and met_before and not causes_agree(log_before, met_before))
+    disagreement = _detect_disagreement(log_before, met_before)
     neg["disagreement"] = disagreement
 
     if not disagreement:
@@ -567,8 +642,12 @@ def run_investigation(logs_snapshot, metrics_snapshot):
     add_event("System", "Phase 4: Post-mortem generation")
     run_postmortem()
 
-    state["status"] = "resolved"
     state["incident_end"] = datetime.now().strftime("%H:%M:%S")
+
+    add_event("System", "Phase 5: Persisting report to Alibaba OSS")
+    store_report_to_oss()
+
+    state["status"] = "resolved"
     add_event("System", "Incident resolved — all agents complete")
 
 

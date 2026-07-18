@@ -49,14 +49,14 @@ The three-way design isolates the value of *collaboration itself*: (2) vs (1) me
 | Metric | Single-Agent | Multi (naive) | Multi (negotiated) | Δ (negot − single) |
 |--------|:------------:|:-------------:|:------------------:|:------------------:|
 | Diagnostic Accuracy (0–1) | 1.0 | 0.0 | 1.0 | 0.0 |
-| Hypotheses Generated | 3 | 8 | 7 | 4 |
-| Evidence Quality (grounded claims) | 12 | 28 | 25 | 13 |
+| Hypotheses Generated | 3 | 7 | 7 | 4 |
+| Evidence Quality (grounded claims) | 12 | 25 | 26 | 14 |
 | Post-Mortem Completeness (0–1) | 1.0 | 1.0 | 1.0 | 0.0 |
-| Time to Diagnosis (s) | 26.74 | 117.97 | 142.34 | 115.6 |
+| Time to Diagnosis (s) | 24.03 | 131.9 | 143.53 | 119.5 |
 
-- **Single-agent identified:** Simultaneous failure of cache-node-2 and absence of a covering database index on the 'category' column in the products table created a cascading failure: cache misses flooded the DB with expensive unindexed queries, exhausting connection pool and memory, which degraded API responsiveness and triggered OOM conditions and 503 errors.
-- **Multi-agent (naive) identified:** JVM heap exhaustion leading to GC thrashing and service degradation
-- **Multi-agent (negotiated) identified:** Cache failure (node-2 loss) triggering massive cache miss cascade, overwhelming the database and initiating a failure chain across service-api
+- **Single-agent identified:** Failure of cache-node-2 at 03:09:40Z caused catastrophic cache miss storm (hit rate collapsed from ~95% to <5%), which flooded the API with uncached product queries; the unindexed 'category' filter in the products query then saturated the DB connection pool and induced severe memory pressure due to buffered requests and GC thrashing — exposing insufficient JVM heap sizing and lack of circuit-breaking or graceful degradation for cache failures.
+- **Multi-agent (naive) identified:** JVM heap exhaustion due to memory leak or insufficient heap allocation, triggering cascading failures
+- **Multi-agent (negotiated) identified:** Cache-node-2 failure causing catastrophic cache miss surge, which overloaded the database and triggered cascading resource exhaustion (connection pool saturation, memory pressure, GC thrashing)
 
 
 ## Expected Outcomes

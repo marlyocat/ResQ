@@ -53,16 +53,63 @@ _STOPWORDS = {
     "cascade", "massive", "sustained", "elevated", "increased", "severe",
     "service", "services", "error", "errors", "failure", "failures", "issue",
     "issues", "degradation", "degraded", "high", "low", "primary", "root",
+    # generic infra/observability nouns — present in almost any incident and so
+    # NOT evidence that two hypotheses name the same root cause (this is what let
+    # "memory leak" and "cache failure" register as agreement via 'query'/'requests')
+    "request", "requests", "query", "queries", "latency", "endpoint", "endpoints",
+    "response", "responses", "traffic", "load", "spike", "spikes", "timeout",
+    "timeouts", "system", "systems", "application", "server", "servers", "host",
+    "hosts", "resource", "resources", "usage", "utilization", "performance",
 }
 
 
 def causes_agree(cause_a: str, cause_b: str) -> bool:
-    """Heuristic: do two root-cause statements share a significant term?"""
+    """Heuristic fallback: do two root-cause statements share a significant term?
+
+    This is a cheap last resort used only when the LLM-based check
+    (`causes_conflict_llm`) is unavailable. Word overlap is a weak signal —
+    generic infra nouns are stopword-filtered above — so prefer the LLM check.
+    """
     def sig(text):
         return {w for w in "".join(c if c.isalnum() else " " for c in text.lower()).split()
                 if len(w) > 3 and w not in _STOPWORDS}
     a, b = sig(cause_a), sig(cause_b)
     return bool(a & b)
+
+
+CONFLICT_CHECK_SYSTEM = (
+    "You are an incident-response arbiter. You are given two root-cause hypotheses "
+    "for the SAME incident, each from a different specialist. Decide whether they "
+    "identify the SAME underlying root cause or DIFFERENT / conflicting root causes. "
+    "A downstream symptom is NOT the same as the cause that produced it "
+    "(e.g. 'memory pressure' as a symptom of a 'cache failure' is DIFFERENT). "
+    "Answer with exactly one word: SAME or DIFFERENT."
+)
+
+
+async def causes_conflict_llm(qwen_client, cause_a: str, cause_b: str) -> bool:
+    """Semantic disagreement check: True if the two causes conflict.
+
+    Asks the model whether the two statements name the same root cause. Falls back
+    to the `causes_agree` keyword heuristic if the call fails or is unavailable.
+    """
+    if not (cause_a and cause_b):
+        return False
+    try:
+        resp = await qwen_client.analyze_with_context(
+            system_prompt=CONFLICT_CHECK_SYSTEM,
+            user_input=(f"Hypothesis A: {cause_a}\n\nHypothesis B: {cause_b}\n\n"
+                        "Do these identify the SAME root cause or DIFFERENT ones? "
+                        "Answer SAME or DIFFERENT."),
+        )
+        ans = (resp.get("raw_response", "") or "").strip().upper()
+        if ans.startswith("DIFFERENT"):
+            return True
+        if ans.startswith("SAME"):
+            return False
+    except Exception as e:  # noqa: BLE001 - detection must never crash the pipeline
+        logger.warning("LLM conflict check failed (%s); falling back to heuristic", e)
+    return not causes_agree(cause_a, cause_b)
 
 
 async def negotiate(agent, own_hypotheses: List[dict], peer_name: str,

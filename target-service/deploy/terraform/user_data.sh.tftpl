@@ -6,9 +6,13 @@ apt-get install -y python3 python3-pip python3-venv unzip curl
 
 mkdir -p /opt/flaskapp && cd /opt/flaskapp
 
-# The app package is uploaded to OSS by Terraform; retry until it's readable.
+# The app package is uploaded to a PRIVATE OSS bucket by Terraform. Download it
+# with credentials via ossutil (no public access needed). Retry until readable.
+curl -fsSL https://gosspublic.alicdn.com/ossutil/1.7.18/ossutil64 -o /usr/local/bin/ossutil
+chmod +x /usr/local/bin/ossutil
 for i in $(seq 1 30); do
-  curl -fsSL "${app_zip_url}" -o app.zip && break
+  /usr/local/bin/ossutil cp "oss://${oss_bucket_name}/${app_zip_key}" app.zip \
+    -e "oss-${region}.aliyuncs.com" -i "${access_key}" -k "${secret_key}" -f && break
   echo "waiting for app package in OSS... ($i)"
   sleep 5
 done
