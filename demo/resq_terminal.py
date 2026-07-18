@@ -813,6 +813,7 @@ class NegotiationWidget(Static):
 
     def on_mount(self):
         self.border_title = "Agent Negotiation"
+        self._scrolled_into_view = False
         self.set_interval(0.5, self.refresh_neg)
 
     def refresh_neg(self):
@@ -821,6 +822,16 @@ class NegotiationWidget(Static):
             self.update("[dim]Awaiting parallel diagnosis...[/dim]")
             return
 
+        # Bring this panel into view once, the moment the negotiation becomes
+        # active, so it isn't left below the fold during the run (it sits 4th in
+        # the scroll column). One-shot so it never fights manual scrolling.
+        if not self._scrolled_into_view and neg["status"] != "idle":
+            self._scrolled_into_view = True
+            try:
+                self.scroll_visible(animate=True, top=True)
+            except Exception:
+                pass
+
         if neg.get("disagreement") is False:
             self.update("[green]✓ Log Analyzer and Metric Monitor agree — "
                         "no conflict to resolve.[/green]")
@@ -828,8 +839,8 @@ class NegotiationWidget(Static):
 
         lines = ["[bold red]⚔ Conflict detected between specialists[/bold red]", ""]
         lines.append("[dim]Initial positions:[/dim]")
-        lines.append(f"  [blue]📝 Log Analyzer:[/blue]    {neg.get('log_before', '')[:66]}")
-        lines.append(f"  [magenta]📊 Metric Monitor:[/magenta] {neg.get('metric_before', '')[:66]}")
+        lines.append(f"  [blue]📝 Log Analyzer:[/blue]\n    {neg.get('log_before', '')}")
+        lines.append(f"  [magenta]📊 Metric Monitor:[/magenta]\n    {neg.get('metric_before', '')}")
 
         if neg["status"] == "running":
             lines.append("")
@@ -839,8 +850,8 @@ class NegotiationWidget(Static):
             lines.append("[dim]After negotiation:[/dim]")
             la = neg.get("log_after") or "(unchanged)"
             ma = neg.get("metric_after") or "(unchanged)"
-            lines.append(f"  [blue]📝 Log Analyzer:[/blue]    {la[:66]}")
-            lines.append(f"  [magenta]📊 Metric Monitor:[/magenta] {ma[:66]}")
+            lines.append(f"  [blue]📝 Log Analyzer:[/blue]\n    {la}")
+            lines.append(f"  [magenta]📊 Metric Monitor:[/magenta]\n    {ma}")
             lines.append("")
             lines.append("[green]✓ Conflict resolved — revised findings sent to Coordinator[/green]")
 
