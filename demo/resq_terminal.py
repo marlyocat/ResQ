@@ -966,7 +966,7 @@ class RootCauseWidget(Static):
     can_focus = True
 
     def on_mount(self):
-        self.border_title = "Root Cause & Action Plan"
+        self.border_title = "Final Verdict & Action Plan"
         self.set_interval(1.0, self.refresh_rc)
 
     def refresh_rc(self):
@@ -975,17 +975,25 @@ class RootCauseWidget(Static):
             self.update("[dim]Waiting for investigation...[/dim]")
             return
 
-        conf = int(rc.get("confidence", 0) * 100)
-        lines = [
-            f"[bold green]{rc.get('cause', 'Unknown')}[/bold green]",
-            f"[dim]Confidence: {conf}%  |  Severity: {rc.get('severity', 'unknown').upper()}[/dim]",
-        ]
+        fv = state.get("final_verdict")
+        lines = ["[bold white on red] ⚖  FINAL VERDICT [/bold white on red]", ""]
+        if fv:
+            lines.append(f"[bold green]{fv.get('root_cause', 'Unknown')}[/bold green]")
+            lines.append(f"[dim]Confidence: {fv.get('confidence_pct', 0)}%  |  "
+                         f"Severity: {fv.get('severity', 'UNKNOWN')}[/dim]")
+            lines.append(f"[cyan]How determined:[/cyan] {fv.get('how_determined', '')}")
+            lines.append(f"[yellow]Immediate action:[/yellow] {fv.get('immediate_action', '')}")
+        else:
+            # Verdict not built yet (arbitration done, post-mortem pending).
+            conf = int(rc.get("confidence", 0) * 100)
+            lines.append(f"[bold green]{rc.get('cause', 'Unknown')}[/bold green]")
+            lines.append(f"[dim]Confidence: {conf}%  |  "
+                         f"Severity: {rc.get('severity', 'unknown').upper()}[/dim]")
 
-        # Add incident timeline
         start = state.get("incident_start", "")
         end = state.get("incident_end", "")
         if start and end:
-            lines.append(f"[dim]Incident: {start} → {end}[/dim]")
+            lines.append(f"[dim]Incident window: {start} → {end}[/dim]")
         lines.append("")
 
         ap = state.get("action_plan", {})
@@ -994,8 +1002,12 @@ class RootCauseWidget(Static):
             for i, step in enumerate(ap["steps"]):
                 lines.append(f"  {i+1}. {step}")
 
-        pm = state.get("postmortem")
-        if pm:
+        # Post-mortem dump — strip the verdict markdown we prepend to it, so the
+        # verdict shows once (formatted above) instead of twice (raw here).
+        pm = state.get("postmortem") or ""
+        if fv and fv.get("markdown") and pm.startswith(fv["markdown"]):
+            pm = pm[len(fv["markdown"]):]
+        if pm.strip():
             lines.append("")
             lines.append("[bold cyan]Post-Mortem:[/bold cyan]")
             lines.append(f"[dim]{pm}[/dim]")
